@@ -1,0 +1,228 @@
+#include "gpu_device.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <errno.h>
+
+// Debug logging macros
+#define GPU_LOG(device, fmt, ...) \
+    do { \
+        if ((device) && (device)->debug_enabled) { \
+            printf("[GPU] " fmt "\n", ##__VA_ARGS__); \
+        } \
+    } while(0)
+
+#define GPU_ERROR(fmt, ...) \
+    fprintf(stderr, "[GPU ERROR] " fmt "\n", ##__VA_ARGS__)
+
+// Memory alignment for GPU operations (typically 256 bytes)
+#define GPU_MEMORY_ALIGNMENT 256
+
+// Helper function to align size to GPU requirements
+static u64 align_gpu_memory(u64 size, u64 alignment) {
+    return (size + alignment - 1) & ~(alignment - 1);
+}
+
+// GPU memory allocation implementation
+GibgoResult gibgo_allocate_gpu_memory(GibgoGPUDevice* device, u64 size, u64* out_address) {
+    if (!device || !out_address || size == 0) {
+        return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
+    }
+
+    // Align size to GPU memory requirements
+    u64 aligned_size = align_gpu_memory(size, GPU_MEMORY_ALIGNMENT);
+
+    // Check if we have enough VRAM available
+    if (device->vram_allocation_offset + aligned_size > device->vram.size) {
+        GPU_ERROR("Out of VRAM: requested %lu bytes, available %lu bytes",
+                  aligned_size, device->vram.size - device->vram_allocation_offset);
+        return GIBGO_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+
+    // Calculate the GPU address for this allocation
+    u64 gpu_address = device->vram.physical_address + device->vram_allocation_offset;
+
+    GPU_LOG(device, "Allocated %lu bytes of GPU memory at 0x%016lX", aligned_size, gpu_address);
+
+    // Update allocation offset
+    device->vram_allocation_offset += aligned_size;
+
+    *out_address = gpu_address;
+    return GIBGO_RESULT_SUCCESS;
+}
+
+// GPU memory deallocation (simplified - real implementation would have a heap allocator)
+GibgoResult gibgo_free_gpu_memory(GibgoGPUDevice* device, u64 address, u64 size) {
+    if (!device) {
+        return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
+    }
+
+    GPU_LOG(device, "Freed %lu bytes of GPU memory at 0x%016lX", size, address);
+
+    // In a real implementation, you would mark this memory as free in a heap structure
+    // For simplicity, we just log the operation for now
+
+    return GIBGO_RESULT_SUCCESS;
+}
+
+// Map GPU memory to CPU-accessible address space
+GibgoResult gibgo_map_gpu_memory(GibgoGPUDevice* device, u64 gpu_address, u64 size, u8** out_cpu_address) {
+    if (!device || !out_cpu_address || size == 0) {
+        return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
+    }
+
+    // Check if the GPU address is valid
+    if (gpu_address < device->vram.physical_address ||
+        gpu_address + size > device->vram.physical_address + device->vram.size) {
+        GPU_ERROR("Invalid GPU memory address range: 0x%016lX - 0x%016lX",
+                  gpu_address, gpu_address + size);
+        return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
+    }
+
+    // Map the GPU memory region to CPU address space
+    void* mapped_address = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                               device->device_fd, gpu_address);
+
+    if (mapped_address == MAP_FAILED) {
+        GPU_ERROR("Failed to map GPU memory at 0x%016lX (size: %lu): %s",
+                  gpu_address, size, strerror(errno));
+        return GIBGO_RESULT_ERROR_MEMORY_MAP_FAILED;
+    }
+
+    GPU_LOG(device, "Mapped GPU memory 0x%016lX (%lu bytes) to CPU address %p",
+            gpu_address, size, mapped_address);
+
+    *out_cpu_address = (u8*)mapped_address;
+    return GIBGO_RESULT_SUCCESS;
+}
+
+// Unmap GPU memory from CPU address space
+GibgoResult gibgo_unmap_gpu_memory(GibgoGPUDevice* device, u8* cpu_address, u64 size) {
+    if (!device || !cpu_address) {
+        return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
+    }
+
+    if (munmap(cpu_address, size) != 0) {
+        GPU_ERROR("Failed to unmap CPU memory at %p (size: %lu): %s",
+                  cpu_address, size, strerror(errno));
+        return GIBGO_RESULT_ERROR_MEMORY_MAP_FAILED;
+    }
+
+    GPU_LOG(device, "Unmapped CPU memory at %p (%lu bytes)", cpu_address, size);
+    return GIBGO_RESULT_SUCCESS;
+}
+
+// Context management implementation
+GibgoResult gibgo_create_context(GibgoGPUDevice* device, GibgoContext** out_context) {
+    if (!device || !out_context) {
+        return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
+    }
+
+    GibgoContext* context = (GibgoContext*)calloc(1, sizeof(GibgoContext));
+    if (!context) {
+        return GIBGO_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+
+    context->device = device;
+    context->current_frame_index = 0;
+    context->frame_fence = 1;
+
+    // Set default framebuffer parameters
+    context->framebuffer_width = 800;
+    context->framebuffer_height = 600;
+    context->framebuffer_format = 0x8888; // RGBA8
+
+    // Allocate framebuffer memory
+    u64 framebuffer_size = context->framebuffer_width * context->framebuffer_height * 4; // 4 bytes per pixel
+    GibgoResult result = gibgo_allocate_gpu_memory(device, framebuffer_size, &context->framebuffer_address);
+    if (result != GIBGO_RESULT_SUCCESS) {
+        free(context);
+        return result;
+    }
+
+    GPU_LOG(device, "Created graphics context - framebuffer %ux%u at 0x%016lX",
+            context->framebuffer_width, context->framebuffer_height, context->framebuffer_address);
+
+    *out_context = context;
+    return GIBGO_RESULT_SUCCESS;
+}
+
+// Context destruction
+GibgoResult gibgo_destroy_context(GibgoContext* context) {
+    if (!context) {
+        return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
+    }
+
+    // Free framebuffer memory
+    if (context->framebuffer_address) {
+        u64 framebuffer_size = context->framebuffer_width * context->framebuffer_height * 4;
+        gibgo_free_gpu_memory(context->device, context->framebuffer_address, framebuffer_size);
+    }
+
+    // Free vertex buffer memory
+    if (context->vertex_buffer_address) {
+        // Assuming maximum vertex buffer size for cleanup
+        gibgo_free_gpu_memory(context->device, context->vertex_buffer_address, 1024 * 1024);
+    }
+
+    GPU_LOG(context->device, "Destroyed graphics context");
+    free(context);
+    return GIBGO_RESULT_SUCCESS;
+}
+
+// Vertex data upload implementation
+GibgoResult gibgo_upload_vertices(GibgoContext* context, void* vertex_data, u32 vertex_count, u32 vertex_stride) {
+    if (!context || !vertex_data || vertex_count == 0 || vertex_stride == 0) {
+        return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
+    }
+
+    u64 buffer_size = vertex_count * vertex_stride;
+
+    // Allocate GPU memory for vertex buffer if not already allocated
+    if (context->vertex_buffer_address == 0) {
+        GibgoResult result = gibgo_allocate_gpu_memory(context->device, buffer_size, &context->vertex_buffer_address);
+        if (result != GIBGO_RESULT_SUCCESS) {
+            return result;
+        }
+    }
+
+    // Map the vertex buffer to CPU address space
+    u8* mapped_buffer = NULL;
+    GibgoResult result = gibgo_map_gpu_memory(context->device, context->vertex_buffer_address, buffer_size, &mapped_buffer);
+    if (result != GIBGO_RESULT_SUCCESS) {
+        return result;
+    }
+
+    // Copy vertex data to GPU memory
+    memcpy(mapped_buffer, vertex_data, buffer_size);
+
+    // Unmap the buffer
+    gibgo_unmap_gpu_memory(context->device, mapped_buffer, buffer_size);
+
+    // Update context state
+    context->vertex_buffer_stride = vertex_stride;
+    context->vertex_count = vertex_count;
+
+    GPU_LOG(context->device, "Uploaded %u vertices (%lu bytes) to GPU buffer at 0x%016lX",
+            vertex_count, buffer_size, context->vertex_buffer_address);
+
+    return GIBGO_RESULT_SUCCESS;
+}
+
+// Context state debugging
+void gibgo_debug_context_state(GibgoContext* context) {
+    if (!context) return;
+
+    printf("\n=== Graphics Context State ===\n");
+    printf("Framebuffer: %ux%u at 0x%016lX\n",
+           context->framebuffer_width, context->framebuffer_height, context->framebuffer_address);
+    printf("Vertex Buffer: %u vertices (%u bytes each) at 0x%016lX\n",
+           context->vertex_count, context->vertex_buffer_stride, context->vertex_buffer_address);
+    printf("Shaders: VS=0x%016lX, FS=0x%016lX\n",
+           context->vertex_shader_address, context->fragment_shader_address);
+    printf("Frame Index: %u, Fence: %u\n",
+           context->current_frame_index, context->frame_fence);
+    printf("==============================\n\n");
+}

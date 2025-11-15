@@ -25,6 +25,13 @@ typedef int32_t   i32;
 typedef uint64_t  u64;
 typedef int64_t   i64;
 
+// Boolean type - 32-bit for alignment and explicit size
+typedef u32 b32;
+
+// Boolean constants
+#define B32_FALSE 0U
+#define B32_TRUE  1U
+
 // Compile-time size verification
 _Static_assert(sizeof(u8)  == 1, "u8 must be exactly 1 byte");
 _Static_assert(sizeof(i8)  == 1, "i8 must be exactly 1 byte");
@@ -34,6 +41,7 @@ _Static_assert(sizeof(u32) == 4, "u32 must be exactly 4 bytes");
 _Static_assert(sizeof(i32) == 4, "i32 must be exactly 4 bytes");
 _Static_assert(sizeof(u64) == 8, "u64 must be exactly 8 bytes");
 _Static_assert(sizeof(i64) == 8, "i64 must be exactly 8 bytes");
+_Static_assert(sizeof(b32) == 4, "b32 must be exactly 4 bytes");
 
 // =============================================================================
 // IEEE 754 FLOATING POINT TYPES - Complete bit-level control
