@@ -1,6 +1,6 @@
 # gibgoCraft Hardware-Direct GPU Triangle Demo
 
-![Triangle Demo](~/Pictures/2.png)
+![Triangle Demo](public/1.png)
 
 ## 🚀 What You've Built
 
