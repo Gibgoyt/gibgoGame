@@ -265,38 +265,36 @@ static void render_triangle_to_framebuffer(u32* framebuffer, u32 width, u32 heig
         {3*width/4, 3*height/4, 0xFF0000FF}  // Bottom right - Blue
     };
 
-    // Simple triangle rasterization using barycentric coordinates
+    // Correct triangle rasterization using barycentric coordinates
     for (u32 y = 0; y < height; y++) {
         for (u32 x = 0; x < width; x++) {
-            // Calculate barycentric coordinates
-            i32 x0 = vertices[0].x, y0 = vertices[0].y;
-            i32 x1 = vertices[1].x, y1 = vertices[1].y;
-            i32 x2 = vertices[2].x, y2 = vertices[2].y;
+            // Triangle vertices
+            float x0 = vertices[0].x, y0 = vertices[0].y;
+            float x1 = vertices[1].x, y1 = vertices[1].y;
+            float x2 = vertices[2].x, y2 = vertices[2].y;
 
-            i32 denom = (y1 - y2)*(x0 - x2) + (x2 - x1)*(y0 - y2);
+            // Calculate barycentric coordinates using the correct formula
+            float denom = (y1 - y2)*(x0 - x2) + (x2 - x1)*(y0 - y2);
             if (denom == 0) continue; // Degenerate triangle
 
-            i32 a = ((y1 - y2)*((i32)x - x2) + (x2 - x1)*((i32)y - y2));
-            i32 b = ((y2 - y0)*((i32)x - x2) + (x0 - x2)*((i32)y - y2));
+            float w0 = ((y1 - y2)*((float)x - x2) + (x2 - x1)*((float)y - y2)) / denom;
+            float w1 = ((y2 - y0)*((float)x - x2) + (x0 - x2)*((float)y - y2)) / denom;
+            float w2 = 1.0f - w0 - w1;
 
-            float alpha = (float)a / denom;
-            float beta = (float)b / denom;
-            float gamma = 1.0f - alpha - beta;
+            // Check if point is inside triangle (all barycentric coordinates >= 0)
+            if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+                // Interpolate colors using correct barycentric weights
+                u32 r = (u32)(w0 * ((vertices[0].color >> 16) & 0xFF) +
+                             w1 * ((vertices[1].color >> 16) & 0xFF) +
+                             w2 * ((vertices[2].color >> 16) & 0xFF));
+                u32 g = (u32)(w0 * ((vertices[0].color >> 8) & 0xFF) +
+                             w1 * ((vertices[1].color >> 8) & 0xFF) +
+                             w2 * ((vertices[2].color >> 8) & 0xFF));
+                u32 b_val = (u32)(w0 * (vertices[0].color & 0xFF) +
+                                 w1 * (vertices[1].color & 0xFF) +
+                                 w2 * (vertices[2].color & 0xFF));
 
-            // Check if point is inside triangle
-            if (alpha >= 0 && beta >= 0 && gamma >= 0) {
-                // Interpolate colors
-                u32 r = (u32)(alpha * ((vertices[0].color >> 16) & 0xFF) +
-                             beta * ((vertices[1].color >> 16) & 0xFF) +
-                             gamma * ((vertices[2].color >> 16) & 0xFF));
-                u32 g = (u32)(alpha * ((vertices[0].color >> 8) & 0xFF) +
-                             beta * ((vertices[1].color >> 8) & 0xFF) +
-                             gamma * ((vertices[2].color >> 8) & 0xFF));
-                u32 b_val = (u32)(alpha * (vertices[0].color & 0xFF) +
-                                 beta * (vertices[1].color & 0xFF) +
-                                 gamma * (vertices[2].color & 0xFF));
-
-                // Clamp values
+                // Clamp values to prevent overflow
                 if (r > 255) r = 255;
                 if (g > 255) g = 255;
                 if (b_val > 255) b_val = 255;

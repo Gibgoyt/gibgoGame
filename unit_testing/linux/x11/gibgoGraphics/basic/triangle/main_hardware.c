@@ -25,6 +25,7 @@
 
 // OUR CUSTOM HARDWARE-DIRECT GRAPHICS API!
 #include "gibgo_graphics.h"
+#include "gpu_device.h"  // For internal GPU types
 
 // Constants
 #define WINDOW_WIDTH 800
@@ -167,7 +168,15 @@ static b32 init_graphics(AppContext* ctx) {
         return B32_FALSE;
     }
 
+    // Allocate XImage data buffer (one-time allocation to prevent memory leaks)
+    ctx->ximage->data = malloc(ctx->ximage->bytes_per_line * ctx->ximage->height);
+    if (!ctx->ximage->data) {
+        fprintf(stderr, "Failed to allocate XImage data buffer\n");
+        return B32_FALSE;
+    }
+
     printf("✅ X11 graphics context initialized for framebuffer display\n");
+    printf("📍 XImage buffer allocated: %d bytes\n", ctx->ximage->bytes_per_line * ctx->ximage->height);
 
     // Skip shader loading for now - we're using CPU rasterization
     printf("⚠️ Skipping SPIR-V shader loading - using CPU triangle rasterizer\n");
@@ -219,41 +228,38 @@ static void handle_events(AppContext* ctx) {
 
 // Copy framebuffer to X11 window for display
 static void copy_framebuffer_to_x11(AppContext* ctx) {
-    // Get framebuffer data from graphics system
-    u32* framebuffer_data = NULL;
-    u32 fb_width = 0, fb_height = 0;
-
-    // We need to add a function to get framebuffer data
-    // For now, let's use a simple approach - access the internal context
-    // This is a temporary hack to get the triangle showing
-
-    // TODO: Add proper API to get framebuffer data
-    // For now, just fill with a test pattern to verify X11 display works
-
-    if (!ctx->ximage->data) {
-        ctx->ximage->data = malloc(ctx->ximage->bytes_per_line * ctx->ximage->height);
-        if (!ctx->ximage->data) {
-            fprintf(stderr, "Failed to allocate XImage data\n");
-            return;
-        }
+    // Get the actual GPU framebuffer data from the graphics system
+    // Access the internal context to get the DRM framebuffer
+    GibgoGraphicsSystem* system = ctx->graphics;
+    if (!system || !system->is_initialized) {
+        return;
     }
 
-    // Fill XImage with test pattern (we'll fix this to use real framebuffer next)
-    u32* pixels = (u32*)ctx->ximage->data;
+    // Access internal context (this is a direct approach for now)
+    GibgoContext* internal_ctx = (GibgoContext*)system->internal_context;
+    if (!internal_ctx) {
+        return;
+    }
+
+    // Get the GPU device to access the framebuffer
+    GibgoGPUDevice* device = (GibgoGPUDevice*)system->internal_device;
+    if (!device || !device->regs.registers) {
+        return;
+    }
+
+    // The DRM framebuffer is stored in device->regs.registers (we repurposed this field)
+    u32* gpu_framebuffer = (u32*)device->regs.registers;
+    u32* ximage_pixels = (u32*)ctx->ximage->data;
+
+    // Copy GPU framebuffer to XImage (direct memory copy)
     for (int y = 0; y < WINDOW_HEIGHT; y++) {
         for (int x = 0; x < WINDOW_WIDTH; x++) {
-            // Simple triangle test pattern
-            if ((x > WINDOW_WIDTH/4 && x < 3*WINDOW_WIDTH/4) &&
-                (y > WINDOW_HEIGHT/4 && y < 3*WINDOW_HEIGHT/4)) {
-                // Inside triangle area - make it red for testing
-                pixels[y * WINDOW_WIDTH + x] = 0xFFFF0000; // Red
-            } else {
-                pixels[y * WINDOW_WIDTH + x] = 0xFF000000; // Black
-            }
+            int index = y * WINDOW_WIDTH + x;
+            ximage_pixels[index] = gpu_framebuffer[index];
         }
     }
 
-    // Copy to X11 window
+    // Display in X11 window
     XPutImage(ctx->display, ctx->window, ctx->gc, ctx->ximage,
               0, 0, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
     XFlush(ctx->display);
@@ -330,6 +336,19 @@ static void cleanup(AppContext* ctx) {
     }
 
     // Cleanup X11
+    if (ctx->ximage) {
+        if (ctx->ximage->data) {
+            free(ctx->ximage->data);
+            ctx->ximage->data = NULL;
+        }
+        XDestroyImage(ctx->ximage);
+        ctx->ximage = NULL;
+    }
+
+    if (ctx->gc && ctx->display) {
+        XFreeGC(ctx->display, ctx->gc);
+    }
+
     if (ctx->window) {
         XDestroyWindow(ctx->display, ctx->window);
     }
