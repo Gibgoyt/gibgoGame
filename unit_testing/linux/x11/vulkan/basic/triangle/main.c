@@ -3,13 +3,18 @@
  *
  * This test demonstrates basic triangle rendering using Vulkan.
  * It includes the complete graphics pipeline setup and draw commands.
+ *
+ * CUSTOM TYPE SYSTEM: Uses ZERO native C types for complete memory control!
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
 #include <unistd.h>
+
+// Custom type system - ABSOLUTE MEMORY CONTROL
+#include "types.h"
+#include "math.h"
 
 // X11 includes
 #include <X11/Xlib.h>
@@ -27,17 +32,30 @@
 #define ENGINE_NAME "gibgoCraft Engine"
 #define MAX_FRAMES_IN_FLIGHT 2
 
-// Vertex data structure
+// Vertex data structure - CUSTOM TYPES ONLY!
 typedef struct {
-    float pos[2];
-    float color[3];
-} Vertex;
+    Vec2f position;    // 8 bytes: explicit 2D position
+    Vec3f color;       // 16 bytes: explicit 3D color (with padding)
+} CustomVertex;
+// Size will be 8 + 16 = 24 bytes naturally
 
-// Triangle vertices (position + color)
-static const Vertex vertices[] = {
-    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},   // Top vertex - Red
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},    // Bottom right - Green
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}    // Bottom left - Blue
+// Triangle vertices (position + color) - ZERO native floats!
+static const CustomVertex vertices[] = {
+    // Top vertex - Red
+    {
+        .position = {F32_ZERO_INIT, {.bits = 0xBF000000}},                     // (0.0, -0.5)
+        .color = {F32_ONE_INIT, F32_ZERO_INIT, F32_ZERO_INIT, F32_ZERO_INIT}   // Red (1,0,0) + padding
+    },
+    // Bottom right - Green
+    {
+        .position = {{.bits = 0x3F000000}, {.bits = 0x3F000000}},              // (0.5, 0.5)
+        .color = {F32_ZERO_INIT, F32_ONE_INIT, F32_ZERO_INIT, F32_ZERO_INIT}   // Green (0,1,0) + padding
+    },
+    // Bottom left - Blue
+    {
+        .position = {{.bits = 0xBF000000}, {.bits = 0x3F000000}},              // (-0.5, 0.5)
+        .color = {F32_ZERO_INIT, F32_ZERO_INIT, F32_ONE_INIT, F32_ZERO_INIT}   // Blue (0,0,1) + padding
+    }
 };
 
 // Embedded SPIR-V shaders (compiled from GLSL)
@@ -580,24 +598,24 @@ static int create_graphics_pipeline(AppContext* ctx) {
 
     VkPipelineShaderStageCreateInfo shader_stages[] = {vert_stage_info, frag_stage_info};
 
-    // Vertex input
+    // Vertex input - CUSTOM TYPES with explicit memory layout
     VkVertexInputBindingDescription binding_description = {0};
     binding_description.binding = 0;
-    binding_description.stride = sizeof(Vertex);
+    binding_description.stride = sizeof(CustomVertex);         // 24 bytes exactly
     binding_description.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
     VkVertexInputAttributeDescription attribute_descriptions[2] = {0};
-    // Position attribute
+    // Position attribute - maps to Vec2f (8 bytes)
     attribute_descriptions[0].binding = 0;
     attribute_descriptions[0].location = 0;
-    attribute_descriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
-    attribute_descriptions[0].offset = offsetof(Vertex, pos);
+    attribute_descriptions[0].format = VK_FORMAT_R32G32_SFLOAT;           // 2x f32
+    attribute_descriptions[0].offset = offsetof(CustomVertex, position);  // Offset: 0
 
-    // Color attribute
+    // Color attribute - maps to Vec3f (first 12 bytes, ignoring padding)
     attribute_descriptions[1].binding = 0;
     attribute_descriptions[1].location = 1;
-    attribute_descriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attribute_descriptions[1].offset = offsetof(Vertex, color);
+    attribute_descriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;        // 3x f32
+    attribute_descriptions[1].offset = offsetof(CustomVertex, color);     // Offset: 8
 
     VkPipelineVertexInputStateCreateInfo vertex_input_info = {0};
     vertex_input_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
