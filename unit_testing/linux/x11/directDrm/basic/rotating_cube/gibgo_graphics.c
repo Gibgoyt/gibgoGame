@@ -18,6 +18,7 @@ extern GibgoResult gibgo_end_commands(GibgoContext* context);
 extern GibgoResult gibgo_submit_commands(GibgoContext* context);
 extern GibgoResult gibgo_draw_primitives_internal(GibgoContext* context, u32 vertex_count, u32 first_vertex);
 extern GibgoResult gibgo_present_frame(GibgoContext* context);
+extern GibgoResult gibgo_enable_face_culling(GibgoContext* context, b32 enable);
 extern GibgoResult gibgo_wait_for_completion(GibgoContext* context, u32 fence_value);
 extern void gibgo_debug_gpu_state(GibgoGPUDevice* device);
 extern void gibgo_debug_context_state(GibgoContext* context);
@@ -98,6 +99,14 @@ GibgoGraphicsResult gibgo_initialize_graphics(const GibgoGraphicsInitInfo* init_
     // Set up viewport (TODO: implement gibgo_set_viewport function)
     // For now, skip viewport setup - the framebuffer is already created
     printf("[GibgoCraft Graphics] Viewport setup skipped - using framebuffer size\n");
+
+    // Enable face culling for proper 3D rendering (hide back faces)
+    result = gibgo_enable_face_culling(context, B32_TRUE);
+    if (result != GIBGO_RESULT_SUCCESS) {
+        printf("[GibgoCraft Graphics] Warning: Failed to enable face culling\n");
+    } else {
+        printf("[GibgoCraft Graphics] Face culling enabled\n");
+    }
 
     // Store internal structures
     system->internal_device = device;

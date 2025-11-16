@@ -27,25 +27,25 @@ static const GibgoVertex cube_vertices[CUBE_VERTEX_COUNT] = {
 };
 
 // Define indices for 12 triangles (6 faces, 2 triangles per face)
-// Counter-clockwise winding for front-facing triangles
+// Consistent COUNTER-CLOCKWISE winding for ALL faces when viewed from OUTSIDE the cube
 static const u32 cube_indices[CUBE_INDEX_COUNT] = {
-    // Front face (z = +1)
-    0, 1, 2,    2, 3, 0,
+    // Front face (z = +1) - looking at cube from positive Z
+    0, 1, 2,    0, 2, 3,
 
-    // Back face (z = -1)
-    4, 6, 5,    6, 4, 7,
+    // Back face (z = -1) - looking at cube from negative Z (so reverse winding)
+    5, 4, 7,    5, 7, 6,
 
-    // Left face (x = -1)
-    4, 0, 3,    3, 7, 4,
+    // Left face (x = -1) - looking at cube from negative X (so reverse winding)
+    4, 0, 3,    4, 3, 7,
 
-    // Right face (x = +1)
-    1, 5, 6,    6, 2, 1,
+    // Right face (x = +1) - looking at cube from positive X
+    1, 5, 6,    1, 6, 2,
 
-    // Bottom face (y = -1)
-    4, 5, 1,    1, 0, 4,
+    // Bottom face (y = -1) - looking at cube from negative Y (so reverse winding)
+    4, 5, 1,    4, 1, 0,
 
-    // Top face (y = +1)
-    3, 2, 6,    6, 7, 3
+    // Top face (y = +1) - looking at cube from positive Y
+    3, 2, 6,    3, 6, 7
 };
 
 // Helper function to get cube vertices for rendering

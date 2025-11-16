@@ -180,6 +180,7 @@ GibgoResult gibgo_load_shaders(GibgoContext* context, u32* vertex_spirv, u32 ver
 GibgoResult gibgo_set_viewport(GibgoContext* context, u32 width, u32 height);
 GibgoResult gibgo_set_uniform_buffer(GibgoContext* context, u64 buffer_address, u32 buffer_size);
 GibgoResult gibgo_enable_depth_test(GibgoContext* context, b32 enable, f32 near_plane, f32 far_plane);
+GibgoResult gibgo_enable_face_culling(GibgoContext* context, b32 enable);
 // Note: gibgo_draw_primitives is declared in gibgo_graphics.h as part of the high-level API
 GibgoResult gibgo_present_frame(GibgoContext* context);
 

@@ -29,10 +29,11 @@ typedef enum {
     GPU_CMD_SET_FRAGMENT_SHADER = 0x04,
     GPU_CMD_SET_UNIFORM_BUFFER = 0x05,       // New: Set uniform buffer for shaders
     GPU_CMD_ENABLE_DEPTH_TEST = 0x06,        // New: Enable hardware depth testing
-    GPU_CMD_CLEAR_FRAMEBUFFER = 0x07,        // Renumbered to accommodate new commands
-    GPU_CMD_DRAW_PRIMITIVES = 0x08,          // Renumbered
-    GPU_CMD_PRESENT_FRAME = 0x09,            // Renumbered
-    GPU_CMD_FENCE = 0x0A                     // Renumbered
+    GPU_CMD_ENABLE_FACE_CULLING = 0x07,      // New: Enable back-face culling
+    GPU_CMD_CLEAR_FRAMEBUFFER = 0x08,        // Renumbered to accommodate new commands
+    GPU_CMD_DRAW_PRIMITIVES = 0x09,          // Renumbered
+    GPU_CMD_PRESENT_FRAME = 0x0A,            // Renumbered
+    GPU_CMD_FENCE = 0x0B                     // Renumbered
 } GibgoGPUCommandType;
 
 // GPU command structure (32-bit aligned)
@@ -53,7 +54,7 @@ static GibgoResult execute_commands_software(GibgoGPUDevice* device, GibgoGPUCom
 static void execute_3d_cube_rendering(GibgoGPUDevice* device, GibgoGPUCommand* commands, u32 command_count);
 static void render_3d_cube_software(GibgoGPUDevice* device, u32* framebuffer, u32 width, u32 height,
                                    u64 vertex_buffer_addr, u64 uniform_buffer_addr,
-                                   u32 vertex_count, u32 first_vertex);
+                                   u32 vertex_count, u32 first_vertex, b32 face_culling_enabled);
 
 // Helper function to add a command to the current command buffer
 static GibgoResult add_command(GibgoGPUCommandType type, u32 param0, u32 param1, u32 param2) {
@@ -366,6 +367,18 @@ GibgoResult gibgo_enable_depth_test(GibgoContext* context, b32 enable, f32 near_
     return add_command(GPU_CMD_ENABLE_DEPTH_TEST, enable ? 1 : 0, near_bits, far_bits);
 }
 
+// Enable face culling for 3D rendering (hide back-facing triangles)
+GibgoResult gibgo_enable_face_culling(GibgoContext* context, b32 enable) {
+    if (!context) {
+        return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
+    }
+
+    GPU_LOG(context->device, "Face culling %s", enable ? "enabled" : "disabled");
+
+    // Add face culling command
+    return add_command(GPU_CMD_ENABLE_FACE_CULLING, enable ? 1 : 0, 0, 0);
+}
+
 // Execute GPU commands using software rasterization before hardware submission
 static GibgoResult execute_commands_software(GibgoGPUDevice* device, GibgoGPUCommand* commands, u32 command_count) {
     if (!device || !commands) {
@@ -393,6 +406,7 @@ static void execute_3d_cube_rendering(GibgoGPUDevice* device, GibgoGPUCommand* c
     u32 first_vertex = 0;
     u32* framebuffer = (u32*)device->regs.registers;
     u32 fb_width = 800, fb_height = 600; // TODO: get from context
+    b32 face_culling_enabled = B32_TRUE;  // Enable face culling by default
 
     GPU_LOG(device, "🎮 Executing 3D cube rendering with %u commands", command_count);
 
@@ -417,6 +431,11 @@ static void execute_3d_cube_rendering(GibgoGPUDevice* device, GibgoGPUCommand* c
                 GPU_LOG(device, "  ✏️  Drawing %u vertices starting from %u", vertex_count, first_vertex);
                 break;
 
+            case GPU_CMD_ENABLE_FACE_CULLING:
+                face_culling_enabled = cmd->param0 ? B32_TRUE : B32_FALSE;
+                GPU_LOG(device, "  ✂️ Face culling: %s", face_culling_enabled ? "enabled" : "disabled");
+                break;
+
             case GPU_CMD_CLEAR_FRAMEBUFFER:
                 // Clear framebuffer to background color
                 for (u32 j = 0; j < fb_width * fb_height; j++) {
@@ -435,7 +454,7 @@ static void execute_3d_cube_rendering(GibgoGPUDevice* device, GibgoGPUCommand* c
     if (vertex_buffer_address && vertex_count > 0) {
         render_3d_cube_software(device, framebuffer, fb_width, fb_height,
                                 vertex_buffer_address, uniform_buffer_address,
-                                vertex_count, first_vertex);
+                                vertex_count, first_vertex, face_culling_enabled);
     } else {
         GPU_LOG(device, "  ⚠️  Missing vertex data for 3D rendering");
     }
@@ -661,11 +680,28 @@ static void rasterize_triangle(
     }
 }
 
+// Check if triangle is back-facing (for face culling)
+// Returns true if triangle is back-facing (should be culled)
+static b32 is_triangle_back_facing(const TransformedVertex* v1, const TransformedVertex* v2, const TransformedVertex* v3) {
+    // Calculate triangle normal in screen space using cross product
+    f32 edge1_x = f32_sub(v2->position.x, v1->position.x);
+    f32 edge1_y = f32_sub(v2->position.y, v1->position.y);
+    f32 edge2_x = f32_sub(v3->position.x, v1->position.x);
+    f32 edge2_y = f32_sub(v3->position.y, v1->position.y);
+
+    // 2D cross product gives us the Z component of the normal
+    // Positive Z = counter-clockwise (front-facing), negative Z = clockwise (back-facing)
+    f32 cross_product_z = f32_sub(f32_mul(edge1_x, edge2_y), f32_mul(edge1_y, edge2_x));
+
+    // If cross product Z is negative, triangle is back-facing (clockwise winding)
+    return f32_lt(cross_product_z, F32_ZERO);
+}
+
 // Core 3D software rasterizer implementation
 // Note: This is a simplified educational implementation - in reality, this would be done by GPU hardware
 static void render_3d_cube_software(GibgoGPUDevice* device, u32* framebuffer, u32 width, u32 height,
                                    u64 vertex_buffer_addr, u64 uniform_buffer_addr,
-                                   u32 vertex_count, u32 first_vertex) {
+                                   u32 vertex_count, u32 first_vertex, b32 face_culling_enabled) {
 
     GPU_LOG(device, "🎨 Rendering 3D cube: %u vertices from %u, buffers at 0x%lX, 0x%lX",
             vertex_count, first_vertex, vertex_buffer_addr, uniform_buffer_addr);
@@ -753,7 +789,13 @@ static void render_3d_cube_software(GibgoGPUDevice* device, u32* framebuffer, u3
             continue;
         }
 
-        // Step 6: Rasterize the triangle
+        // Step 6: Face culling - skip back-facing triangles if enabled
+        if (face_culling_enabled && is_triangle_back_facing(&tv1, &tv2, &tv3)) {
+            triangles_clipped++;
+            continue;
+        }
+
+        // Step 7: Rasterize the triangle
         rasterize_triangle(framebuffer, width, height, &tv1, &tv2, &tv3);
         triangles_rendered++;
     }

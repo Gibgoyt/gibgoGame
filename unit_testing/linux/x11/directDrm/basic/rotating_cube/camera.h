@@ -28,7 +28,7 @@ typedef struct {
 // Initialize camera with default values for cube viewing
 static inline Camera camera_create_default(void) {
     Camera cam = {
-        .position = vec3f_create(f32_from_native(0.0f), f32_from_native(0.0f), f32_from_native(8.0f)),  // Camera back 8 units
+        .position = vec3f_create(f32_from_native(0.0f), f32_from_native(0.0f), f32_from_native(5.0f)),  // Camera back 5 units
         .target = vec3f_create(f32_from_native(0.0f), f32_from_native(0.0f), f32_from_native(0.0f)),    // Looking at origin
         .up = vec3f_create(f32_from_native(0.0f), f32_from_native(1.0f), f32_from_native(0.0f)),        // Y-axis up
 
