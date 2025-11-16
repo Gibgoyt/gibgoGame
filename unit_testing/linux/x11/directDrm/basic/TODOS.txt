@@ -1,0 +1,3 @@
+1. remove CPU rasterization, it should all happen on the GPU
+2. single vertex cube face generation (for Voxel game engine)
+3. 16 bit colors RGBA being 4 bits each, might contribute to a more retro-feeling game, and reduces memory

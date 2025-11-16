@@ -11,7 +11,9 @@ SOURCES = main_hardware.c \
           gpu_device.c \
           gpu_memory.c \
           gpu_commands.c \
-          shader_data.c
+          shader_data.c \
+          cube_geometry.c \
+          uniform_buffer.c
 
 # Object files
 OBJECTS = $(SOURCES:.c=.o)
@@ -23,7 +25,8 @@ TARGET = triangle_hardware
 LIBS = -lX11 -lm -ldrm
 
 # Header dependencies
-HEADERS = types.h math.h gpu_device.h gibgo_graphics.h
+HEADERS = types.h math.h gpu_device.h gibgo_graphics.h \
+          cube_geometry.h uniform_buffer.h camera.h animation.h
 
 # Default target
 all: shaders $(TARGET)

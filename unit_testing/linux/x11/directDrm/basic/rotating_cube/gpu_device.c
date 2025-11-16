@@ -248,60 +248,12 @@ static int create_drm_framebuffer(int drm_fd, u32 width, u32 height, u32** frame
     return 0; // Success
 }
 
-// CPU triangle rasterizer - renders triangle directly to framebuffer
-static void render_triangle_to_framebuffer(u32* framebuffer, u32 width, u32 height) {
-    // Clear framebuffer to black
+// Removed old triangle rasterizer - now using 3D cube rendering system
+
+// Clear framebuffer to a solid color (preparation for 3D rendering)
+static void clear_framebuffer_to_color(u32* framebuffer, u32 width, u32 height, u32 color) {
     for (u32 i = 0; i < width * height; i++) {
-        framebuffer[i] = 0xFF000000; // Black with alpha
-    }
-
-    // Define triangle vertices (in screen coordinates)
-    struct {
-        i32 x, y;
-        u32 color;
-    } vertices[3] = {
-        {width/2, height/4, 0xFFFF0000},     // Top vertex - Red
-        {width/4, 3*height/4, 0xFF00FF00},   // Bottom left - Green
-        {3*width/4, 3*height/4, 0xFF0000FF}  // Bottom right - Blue
-    };
-
-    // Correct triangle rasterization using barycentric coordinates
-    for (u32 y = 0; y < height; y++) {
-        for (u32 x = 0; x < width; x++) {
-            // Triangle vertices
-            float x0 = vertices[0].x, y0 = vertices[0].y;
-            float x1 = vertices[1].x, y1 = vertices[1].y;
-            float x2 = vertices[2].x, y2 = vertices[2].y;
-
-            // Calculate barycentric coordinates using the correct formula
-            float denom = (y1 - y2)*(x0 - x2) + (x2 - x1)*(y0 - y2);
-            if (denom == 0) continue; // Degenerate triangle
-
-            float w0 = ((y1 - y2)*((float)x - x2) + (x2 - x1)*((float)y - y2)) / denom;
-            float w1 = ((y2 - y0)*((float)x - x2) + (x0 - x2)*((float)y - y2)) / denom;
-            float w2 = 1.0f - w0 - w1;
-
-            // Check if point is inside triangle (all barycentric coordinates >= 0)
-            if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-                // Interpolate colors using correct barycentric weights
-                u32 r = (u32)(w0 * ((vertices[0].color >> 16) & 0xFF) +
-                             w1 * ((vertices[1].color >> 16) & 0xFF) +
-                             w2 * ((vertices[2].color >> 16) & 0xFF));
-                u32 g = (u32)(w0 * ((vertices[0].color >> 8) & 0xFF) +
-                             w1 * ((vertices[1].color >> 8) & 0xFF) +
-                             w2 * ((vertices[2].color >> 8) & 0xFF));
-                u32 b_val = (u32)(w0 * (vertices[0].color & 0xFF) +
-                                 w1 * (vertices[1].color & 0xFF) +
-                                 w2 * (vertices[2].color & 0xFF));
-
-                // Clamp values to prevent overflow
-                if (r > 255) r = 255;
-                if (g > 255) g = 255;
-                if (b_val > 255) b_val = 255;
-
-                framebuffer[y * width + x] = 0xFF000000 | (r << 16) | (g << 8) | b_val;
-            }
-        }
+        framebuffer[i] = color;
     }
 }
 
@@ -380,10 +332,10 @@ GibgoResult gibgo_create_device(u32 gpu_index, GibgoGPUDevice** out_device) {
     device->regs.registers = (volatile u32*)framebuffer;
     device->regs.register_space_size = fb_size;
 
-    // Render triangle to framebuffer
-    GPU_LOG(device, "🎨 Rendering triangle to framebuffer...");
-    render_triangle_to_framebuffer(framebuffer, fb_width, fb_height);
-    GPU_LOG(device, "✅ Triangle rendered successfully!");
+    // Clear framebuffer to prepare for 3D rendering
+    GPU_LOG(device, "🎨 Clearing framebuffer for 3D rendering...");
+    clear_framebuffer_to_color(framebuffer, fb_width, fb_height, 0xFF222222); // Dark gray background
+    GPU_LOG(device, "✅ Framebuffer cleared and ready for 3D rendering!");
 
     // Set up register offsets (vendor-specific, these are examples)
     switch (device->info.vendor) {
@@ -418,7 +370,6 @@ GibgoResult gibgo_create_device(u32 gpu_index, GibgoGPUDevice** out_device) {
     device->vram.physical_address = device->info.bar0_base + 0x01000000; // Offset past registers
     device->vram.size = device->info.vram_size;
     device->vram.is_device_local = 1;
-    device->vram.mapped_address = (u8*)framebuffer; // Store mapped framebuffer address
     device->vram_allocation_offset = 0;
 
     // Initialize command ring buffer

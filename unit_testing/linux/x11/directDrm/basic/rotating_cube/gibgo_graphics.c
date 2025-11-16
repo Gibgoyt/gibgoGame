@@ -16,7 +16,7 @@ extern GibgoResult gibgo_set_viewport(GibgoContext* context, u32 width, u32 heig
 extern GibgoResult gibgo_begin_commands(GibgoContext* context);
 extern GibgoResult gibgo_end_commands(GibgoContext* context);
 extern GibgoResult gibgo_submit_commands(GibgoContext* context);
-extern GibgoResult gibgo_draw_primitives(GibgoContext* context, u32 vertex_count, u32 first_vertex);
+extern GibgoResult gibgo_draw_primitives_internal(GibgoContext* context, u32 vertex_count, u32 first_vertex);
 extern GibgoResult gibgo_present_frame(GibgoContext* context);
 extern GibgoResult gibgo_wait_for_completion(GibgoContext* context, u32 fence_value);
 extern void gibgo_debug_gpu_state(GibgoGPUDevice* device);
@@ -199,7 +199,7 @@ GibgoGraphicsResult gibgo_draw_triangle(GibgoGraphicsSystem* system) {
     }
 
     GibgoContext* context = (GibgoContext*)system->internal_context;
-    GibgoResult result = gibgo_draw_primitives(context, 3, 0); // 3 vertices, starting from 0
+    GibgoResult result = gibgo_draw_primitives_internal(context, 3, 0); // 3 vertices, starting from 0
 
     return convert_result(result);
 }
@@ -242,261 +242,6 @@ GibgoGraphicsResult gibgo_wait_for_frame_completion(GibgoGraphicsSystem* system)
 
     GibgoContext* context = (GibgoContext*)system->internal_context;
     GibgoResult result = gibgo_wait_for_completion(context, context->frame_fence);
-
-    return convert_result(result);
-}
-
-// =============================================================================
-// 3D CUBE RENDERING FUNCTIONS
-// =============================================================================
-
-// Add external function declarations for depth testing
-extern GibgoResult gibgo_set_depth_buffer(GibgoContext* context, u64 depth_buffer_address, u32 depth_format);
-extern GibgoResult gibgo_clear_depth_buffer(GibgoContext* context, f32 depth_value);
-extern GibgoResult gibgo_enable_depth_test(GibgoContext* context, b32 enable);
-extern GibgoResult gibgo_set_depth_compare(GibgoContext* context, u32 compare_op);
-extern GibgoResult gibgo_set_matrices(GibgoContext* context, u64 matrix_buffer_address);
-
-// Global storage for cube data (we'll store this in the system)
-// Global variables for cross-module access (needed for GPU command execution)
-GibgoCubeVertex* stored_cube_vertices = NULL;
-u32 stored_vertex_count = 0;
-static u16* stored_cube_indices = NULL;
-static u32 stored_index_count = 0;
-static Mat4f stored_model, stored_view, stored_projection;
-u64 vertex_buffer_address_global = 0;  // Global vertex buffer address
-
-// Upload cube vertex data
-GibgoGraphicsResult gibgo_upload_cube_vertices(GibgoGraphicsSystem* system,
-                                              const GibgoCubeVertex* vertices, u32 vertex_count) {
-    if (!system || !system->is_initialized || !vertices || vertex_count == 0) {
-        return GIBGO_ERROR_INVALID_PARAMETER;
-    }
-
-    // Store cube vertices for later rendering (simplified approach)
-    if (stored_cube_vertices) {
-        free(stored_cube_vertices);
-    }
-
-    stored_cube_vertices = (GibgoCubeVertex*)malloc(sizeof(GibgoCubeVertex) * vertex_count);
-    if (!stored_cube_vertices) {
-        return GIBGO_ERROR_OUT_OF_MEMORY;
-    }
-
-    memcpy(stored_cube_vertices, vertices, sizeof(GibgoCubeVertex) * vertex_count);
-    stored_vertex_count = vertex_count;
-
-    // Upload vertex buffer to GPU memory
-    GibgoContext* context = (GibgoContext*)system->internal_context;
-
-    if (vertex_buffer_address_global == 0) {
-        u64 vertex_buffer_size = vertex_count * sizeof(GibgoCubeVertex);
-        GibgoResult result = gibgo_allocate_gpu_memory(context->device, vertex_buffer_size, &vertex_buffer_address_global);
-        if (result != GIBGO_RESULT_SUCCESS) {
-            printf("[GibgoCraft Graphics] Failed to allocate vertex buffer\n");
-            return convert_result(result);
-        }
-
-        // Issue SET_VERTEX_BUFFER command (skip memory mapping for now - use stored CPU data)
-        GibgoResult cmd_result = gibgo_set_vertex_buffer(context, vertex_buffer_address_global);
-        if (cmd_result != GIBGO_RESULT_SUCCESS) {
-            printf("[GibgoCraft Graphics] Failed to set vertex buffer\n");
-            return convert_result(cmd_result);
-        }
-
-        printf("[GibgoCraft Graphics] Set vertex buffer address: 0x%016lX (%u vertices)\n",
-               vertex_buffer_address_global, vertex_count);
-        printf("[GibgoCraft Graphics] Note: GPU will access vertex data via stored CPU buffer\n");
-    }
-
-    return GIBGO_SUCCESS;
-}
-
-// Set Model-View-Projection matrices
-GibgoGraphicsResult gibgo_set_mvp_matrices(GibgoGraphicsSystem* system,
-                                          const Mat4f* model, const Mat4f* view, const Mat4f* projection) {
-    if (!system || !system->is_initialized || !model || !view || !projection) {
-        return GIBGO_ERROR_INVALID_PARAMETER;
-    }
-
-    // Store matrices for later use
-    stored_model = *model;
-    stored_view = *view;
-    stored_projection = *projection;
-
-    // Upload matrices to GPU memory
-    GibgoContext* context = (GibgoContext*)system->internal_context;
-
-    // Create a combined matrix structure for GPU
-    static TransformMatrices gpu_matrices;
-    gpu_matrices.model = *model;
-    gpu_matrices.view = *view;
-    gpu_matrices.projection = *projection;
-
-    // Allocate GPU memory for matrices if not already done
-    static u64 matrix_buffer_address = 0;
-    if (matrix_buffer_address == 0) {
-        GibgoResult result = gibgo_allocate_gpu_memory(context->device, sizeof(TransformMatrices), &matrix_buffer_address);
-        if (result != GIBGO_RESULT_SUCCESS) {
-            return convert_result(result);
-        }
-    }
-
-    // Copy matrix data to GPU memory using proper mapping
-    u8* gpu_mapped_ptr = NULL;
-    GibgoResult map_result = gibgo_map_gpu_memory(context->device, matrix_buffer_address,
-                                                  sizeof(TransformMatrices), &gpu_mapped_ptr);
-    if (map_result == GIBGO_RESULT_SUCCESS) {
-        memcpy(gpu_mapped_ptr, &gpu_matrices, sizeof(TransformMatrices));
-        gibgo_unmap_gpu_memory(context->device, gpu_mapped_ptr, sizeof(TransformMatrices));
-    } else {
-        // If mapping fails, just skip the memory copy for now
-        // GPU commands will still be issued but data might not be accessible
-    }
-
-    // Set matrices buffer for GPU shaders
-    GibgoResult result = gibgo_set_matrices(context, matrix_buffer_address);
-    if (result != GIBGO_RESULT_SUCCESS) {
-        return convert_result(result);
-    }
-
-    return GIBGO_SUCCESS;
-}
-
-// Simple CPU-based cube rasterizer (replaces the triangle)
-static void render_cube_to_framebuffer(GibgoGraphicsSystem* system) {
-    if (!stored_cube_vertices || !stored_cube_indices) {
-        return;
-    }
-
-    // Get framebuffer access through the GPU device
-    GibgoGPUDevice* device = (GibgoGPUDevice*)system->internal_device;
-    GibgoContext* context = (GibgoContext*)system->internal_context;
-
-    // For now, let's just render a few colored quads to show the cube faces
-    // This is a simplified CPU rasterizer that writes directly to the framebuffer
-
-    printf("[GibgoCraft Graphics] CPU-rasterizing 3D cube with %u triangles\n", stored_index_count / 3);
-
-    // Since we can't access the framebuffer memory mapping easily,
-    // let's create a simple visual effect by cycling through the face colors
-    // based on the rotation angle to show the cube is "rotating"
-
-    static u32 frame_counter = 0;
-    frame_counter++;
-
-    // Determine which face to show based on rotation (simple approximation)
-    u32 face_index = (frame_counter / 10) % 6;  // Change face every 10 frames
-
-    const char* face_names[] = {"RED (Front)", "GREEN (Back)", "BLUE (Top)",
-                               "YELLOW (Bottom)", "MAGENTA (Right)", "CYAN (Left)"};
-
-    if (frame_counter % 60 == 0) {  // Print every 60 frames
-        printf("[GibgoCraft Graphics] Currently showing: %s face\n", face_names[face_index]);
-    }
-}
-
-// Draw indexed cube geometry
-GibgoGraphicsResult gibgo_draw_indexed_cube(GibgoGraphicsSystem* system,
-                                           const u16* indices, u32 index_count) {
-    if (!system || !system->is_initialized || !indices || index_count == 0) {
-        return GIBGO_ERROR_INVALID_PARAMETER;
-    }
-
-    if (!stored_cube_vertices) {
-        printf("[GibgoCraft Graphics] ERROR: No cube vertices uploaded. Call gibgo_upload_cube_vertices first!\n");
-        return GIBGO_ERROR_INVALID_PARAMETER;
-    }
-
-    // Store indices for later use
-    if (stored_cube_indices) {
-        free(stored_cube_indices);
-    }
-
-    stored_cube_indices = (u16*)malloc(sizeof(u16) * index_count);
-    if (!stored_cube_indices) {
-        return GIBGO_ERROR_OUT_OF_MEMORY;
-    }
-
-    memcpy(stored_cube_indices, indices, sizeof(u16) * index_count);
-    stored_index_count = index_count;
-
-    // Use indexed drawing to properly render the cube
-    GibgoContext* context = (GibgoContext*)system->internal_context;
-    GibgoResult result;
-
-    // Get vertex buffer address from stored vertex upload
-    extern u64 vertex_buffer_address_global;  // From vertex upload
-    if (vertex_buffer_address_global != 0) {
-        result = gibgo_set_vertex_buffer(context, vertex_buffer_address_global);
-        if (result != GIBGO_RESULT_SUCCESS) {
-            printf("[GibgoCraft Graphics] Failed to set vertex buffer in draw call\n");
-        }
-    }
-
-    // Allocate GPU memory for index buffer if not already done
-    static u64 index_buffer_address = 0;
-    if (index_buffer_address == 0) {
-        u64 index_buffer_size = index_count * sizeof(u16);
-        result = gibgo_allocate_gpu_memory(context->device, index_buffer_size, &index_buffer_address);
-        if (result != GIBGO_RESULT_SUCCESS) {
-            return convert_result(result);
-        }
-
-        // Copy index data to GPU memory using proper mapping
-        u8* gpu_mapped_ptr = NULL;
-        GibgoResult map_result = gibgo_map_gpu_memory(context->device, index_buffer_address,
-                                                      index_buffer_size, &gpu_mapped_ptr);
-        if (map_result == GIBGO_RESULT_SUCCESS) {
-            memcpy(gpu_mapped_ptr, indices, index_buffer_size);
-            gibgo_unmap_gpu_memory(context->device, gpu_mapped_ptr, index_buffer_size);
-        }
-    }
-
-    // Set index buffer
-    result = gibgo_set_index_buffer(context, index_buffer_address, 0x1401); // GL_UNSIGNED_SHORT format
-    if (result != GIBGO_RESULT_SUCCESS) {
-        return convert_result(result);
-    }
-
-    // Draw indexed primitives
-    result = gibgo_draw_indexed(context, index_count, 0);
-
-    return convert_result(result);
-}
-
-// Enable depth testing for 3D rendering
-GibgoGraphicsResult gibgo_enable_depth_testing(GibgoGraphicsSystem* system, b32 enable) {
-    if (!system || !system->is_initialized) {
-        return GIBGO_ERROR_INVALID_PARAMETER;
-    }
-
-    GibgoContext* context = (GibgoContext*)system->internal_context;
-
-    // Enable depth test
-    GibgoResult result = gibgo_enable_depth_test(context, enable);
-    if (result != GIBGO_RESULT_SUCCESS) {
-        return convert_result(result);
-    }
-
-    // Set depth comparison to LESS (standard for 3D rendering)
-    result = gibgo_set_depth_compare(context, 1); // 1 = LESS comparison
-
-    printf("[GibgoCraft Graphics] Depth testing %s\n", enable ? "ENABLED" : "DISABLED");
-
-    return convert_result(result);
-}
-
-// Clear depth buffer for 3D rendering
-GibgoGraphicsResult gibgo_clear_depth_buffer_3d(GibgoGraphicsSystem* system) {
-    if (!system || !system->is_initialized) {
-        return GIBGO_ERROR_INVALID_PARAMETER;
-    }
-
-    GibgoContext* context = (GibgoContext*)system->internal_context;
-
-    // Clear depth buffer to maximum depth (1.0)
-    GibgoResult result = gibgo_clear_depth_buffer(context, F32_ONE);
 
     return convert_result(result);
 }
@@ -561,4 +306,44 @@ GibgoGraphicsResult gibgo_get_frame_statistics(GibgoGraphicsSystem* system,
     *commands_submitted = device->commands_submitted;
 
     return GIBGO_SUCCESS;
+}
+
+// Draw primitives with specified vertex count and starting vertex
+GibgoGraphicsResult gibgo_draw_primitives(GibgoGraphicsSystem* system, u32 vertex_count, u32 first_vertex) {
+    if (!system || !system->is_initialized) {
+        return GIBGO_ERROR_INVALID_PARAMETER;
+    }
+
+    GibgoContext* context = (GibgoContext*)system->internal_context;
+    GibgoResult result = gibgo_draw_primitives_internal(context, vertex_count, first_vertex);
+    return convert_result(result);
+}
+
+// Set uniform buffer data for shaders
+GibgoGraphicsResult gibgo_set_uniform_buffer_data(GibgoGraphicsSystem* system, const void* data, u32 size) {
+    if (!system || !system->is_initialized || !data) {
+        return GIBGO_ERROR_INVALID_PARAMETER;
+    }
+
+    GibgoContext* context = (GibgoContext*)system->internal_context;
+    GibgoGPUDevice* device = (GibgoGPUDevice*)system->internal_device;
+
+    // Allocate uniform buffer if needed (simplified implementation)
+    u64 uniform_buffer_address;
+    GibgoResult result = gibgo_allocate_gpu_memory(device, size, &uniform_buffer_address);
+    if (result != GIBGO_RESULT_SUCCESS) {
+        return convert_result(result);
+    }
+
+    // Map uniform buffer memory and copy data
+    u8* mapped_memory;
+    result = gibgo_map_gpu_memory(device, uniform_buffer_address, size, &mapped_memory);
+    if (result == GIBGO_RESULT_SUCCESS) {
+        memcpy(mapped_memory, data, size);
+        gibgo_unmap_gpu_memory(device, mapped_memory, size);
+    }
+
+    // Set uniform buffer in context
+    result = gibgo_set_uniform_buffer(context, uniform_buffer_address, size);
+    return convert_result(result);
 }

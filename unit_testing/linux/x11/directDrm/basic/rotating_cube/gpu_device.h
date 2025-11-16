@@ -119,6 +119,16 @@ struct GibgoContext {
     u32 vertex_buffer_stride;   // Size of each vertex in bytes
     u32 vertex_count;           // Number of vertices to draw
 
+    // Uniform buffer (for 3D transformations)
+    u64 uniform_buffer_address; // GPU address of uniform buffer
+    u32 uniform_buffer_size;    // Size of uniform buffer in bytes
+
+    // Depth testing
+    b32 depth_test_enabled;     // Enable hardware depth testing
+    f32 depth_near;             // Near clipping plane
+    f32 depth_far;              // Far clipping plane
+    u64 depth_buffer_address;   // GPU address of depth buffer
+
     // Synchronization
     u32 frame_fence;            // Fence for current frame
     u32 current_frame_index;    // For double buffering
@@ -151,22 +161,10 @@ GibgoResult gibgo_wait_for_completion(GibgoContext* context, u32 fence_value);
 GibgoResult gibgo_upload_vertices(GibgoContext* context, void* vertex_data, u32 vertex_count, u32 vertex_stride);
 GibgoResult gibgo_load_shaders(GibgoContext* context, u32* vertex_spirv, u32 vertex_size, u32* fragment_spirv, u32 fragment_size);
 GibgoResult gibgo_set_viewport(GibgoContext* context, u32 width, u32 height);
-GibgoResult gibgo_draw_primitives(GibgoContext* context, u32 vertex_count, u32 first_vertex);
+GibgoResult gibgo_set_uniform_buffer(GibgoContext* context, u64 buffer_address, u32 buffer_size);
+GibgoResult gibgo_enable_depth_test(GibgoContext* context, b32 enable, f32 near_plane, f32 far_plane);
+// Note: gibgo_draw_primitives is declared in gibgo_graphics.h as part of the high-level API
 GibgoResult gibgo_present_frame(GibgoContext* context);
-
-// 3D Rendering and Depth Testing
-GibgoResult gibgo_set_depth_buffer(GibgoContext* context, u64 depth_buffer_address, u32 depth_format);
-GibgoResult gibgo_clear_depth_buffer(GibgoContext* context, f32 depth_value);
-GibgoResult gibgo_enable_depth_test(GibgoContext* context, b32 enable);
-GibgoResult gibgo_set_depth_compare(GibgoContext* context, u32 compare_op);
-GibgoResult gibgo_set_matrices(GibgoContext* context, u64 matrix_buffer_address);
-
-// Vertex buffer management
-GibgoResult gibgo_set_vertex_buffer(GibgoContext* context, u64 vertex_buffer_address);
-
-// Index buffer and indexed drawing
-GibgoResult gibgo_set_index_buffer(GibgoContext* context, u64 index_buffer_address, u32 index_format);
-GibgoResult gibgo_draw_indexed(GibgoContext* context, u32 index_count, u32 first_index);
 
 // Utility functions
 const char* gibgo_result_string(GibgoResult result);

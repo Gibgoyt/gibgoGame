@@ -9,7 +9,7 @@
 #define GIBGOCRAFT_MATH_H
 
 #include "types.h"
-#include <math.h>  // For sqrtf, cosf, sinf, tanf
+#include <math.h>  // For sqrtf function
 
 // =============================================================================
 // VECTOR TYPES - Explicit memory layout for GPU compatibility
@@ -360,185 +360,6 @@ static inline Vec4f vec4f_mul_scalar_simd(Vec4f v, f32 scalar) {
 #endif
 
 // =============================================================================
-// MATRIX OPERATIONS - 3D Graphics Transformations
-// =============================================================================
-
-// Mat4f operations
-static inline Mat4f mat4f_identity(void) {
-    Mat4f result = {0};
-    result.cols[0] = vec4f_create(F32_ONE, F32_ZERO, F32_ZERO, F32_ZERO);
-    result.cols[1] = vec4f_create(F32_ZERO, F32_ONE, F32_ZERO, F32_ZERO);
-    result.cols[2] = vec4f_create(F32_ZERO, F32_ZERO, F32_ONE, F32_ZERO);
-    result.cols[3] = vec4f_create(F32_ZERO, F32_ZERO, F32_ZERO, F32_ONE);
-    return result;
-}
-
-static inline Mat4f mat4f_multiply(Mat4f a, Mat4f b) {
-    Mat4f result = {0};
-
-    for (int col = 0; col < 4; col++) {
-        for (int row = 0; row < 4; row++) {
-            f32 sum = F32_ZERO;
-            for (int k = 0; k < 4; k++) {
-                // Column-major: matrix[col][row] = matrix.cols[col].elements[row]
-                f32 a_val, b_val;
-                switch(k) {
-                    case 0: a_val = a.cols[k].x; break;
-                    case 1: a_val = a.cols[k].y; break;
-                    case 2: a_val = a.cols[k].z; break;
-                    case 3: a_val = a.cols[k].w; break;
-                }
-                switch(row) {
-                    case 0: b_val = b.cols[col].x; break;
-                    case 1: b_val = b.cols[col].y; break;
-                    case 2: b_val = b.cols[col].z; break;
-                    case 3: b_val = b.cols[col].w; break;
-                }
-                sum = f32_add(sum, f32_mul(a_val, b_val));
-            }
-            switch(row) {
-                case 0: result.cols[col].x = sum; break;
-                case 1: result.cols[col].y = sum; break;
-                case 2: result.cols[col].z = sum; break;
-                case 3: result.cols[col].w = sum; break;
-            }
-        }
-    }
-    return result;
-}
-
-// Matrix-vector multiplication
-static inline Vec4f mat4f_multiply_vec4f(Mat4f m, Vec4f v) {
-    return vec4f_create(
-        f32_add(f32_add(f32_mul(m.cols[0].x, v.x), f32_mul(m.cols[1].x, v.y)),
-                f32_add(f32_mul(m.cols[2].x, v.z), f32_mul(m.cols[3].x, v.w))),
-        f32_add(f32_add(f32_mul(m.cols[0].y, v.x), f32_mul(m.cols[1].y, v.y)),
-                f32_add(f32_mul(m.cols[2].y, v.z), f32_mul(m.cols[3].y, v.w))),
-        f32_add(f32_add(f32_mul(m.cols[0].z, v.x), f32_mul(m.cols[1].z, v.y)),
-                f32_add(f32_mul(m.cols[2].z, v.z), f32_mul(m.cols[3].z, v.w))),
-        f32_add(f32_add(f32_mul(m.cols[0].w, v.x), f32_mul(m.cols[1].w, v.y)),
-                f32_add(f32_mul(m.cols[2].w, v.z), f32_mul(m.cols[3].w, v.w)))
-    );
-}
-
-// Rotation matrix around arbitrary axis
-static inline Mat4f mat4f_rotate(f32 angle, Vec3f axis) {
-    // Normalize the axis
-    f32 len_sq = vec3f_length_squared(axis);
-    f32 len = f32_from_native(sqrtf(f32_to_native(len_sq)));
-    Vec3f normalized_axis = vec3f_create(
-        f32_div(axis.x, len),
-        f32_div(axis.y, len),
-        f32_div(axis.z, len)
-    );
-
-    f32 c = f32_from_native(cosf(f32_to_native(angle)));
-    f32 s = f32_from_native(sinf(f32_to_native(angle)));
-    f32 t = f32_sub(F32_ONE, c);
-
-    f32 x = normalized_axis.x;
-    f32 y = normalized_axis.y;
-    f32 z = normalized_axis.z;
-
-    Mat4f result = mat4f_identity();
-
-    // Column 0
-    result.cols[0].x = f32_add(f32_mul(f32_mul(t, x), x), c);
-    result.cols[0].y = f32_add(f32_mul(f32_mul(t, x), y), f32_mul(s, z));
-    result.cols[0].z = f32_sub(f32_mul(f32_mul(t, x), z), f32_mul(s, y));
-
-    // Column 1
-    result.cols[1].x = f32_sub(f32_mul(f32_mul(t, x), y), f32_mul(s, z));
-    result.cols[1].y = f32_add(f32_mul(f32_mul(t, y), y), c);
-    result.cols[1].z = f32_add(f32_mul(f32_mul(t, y), z), f32_mul(s, x));
-
-    // Column 2
-    result.cols[2].x = f32_add(f32_mul(f32_mul(t, x), z), f32_mul(s, y));
-    result.cols[2].y = f32_sub(f32_mul(f32_mul(t, y), z), f32_mul(s, x));
-    result.cols[2].z = f32_add(f32_mul(f32_mul(t, z), z), c);
-
-    return result;
-}
-
-// Translation matrix
-static inline Mat4f mat4f_translate(Vec3f translation) {
-    Mat4f result = mat4f_identity();
-    result.cols[3].x = translation.x;
-    result.cols[3].y = translation.y;
-    result.cols[3].z = translation.z;
-    return result;
-}
-
-// Perspective projection matrix
-static inline Mat4f mat4f_perspective(f32 fov_y, f32 aspect, f32 near_z, f32 far_z) {
-    f32 tan_half_fovy = f32_from_native(tanf(f32_to_native(f32_div(fov_y, f32_from_native(2.0f)))));
-
-    Mat4f result = {0};
-    result.cols[0].x = f32_div(F32_ONE, f32_mul(aspect, tan_half_fovy));
-    result.cols[1].y = f32_div(F32_ONE, tan_half_fovy);
-    result.cols[2].z = f32_neg(f32_div(f32_add(far_z, near_z), f32_sub(far_z, near_z)));
-    result.cols[2].w = f32_from_native(-1.0f);
-    result.cols[3].z = f32_neg(f32_div(f32_mul(f32_from_native(2.0f), f32_mul(far_z, near_z)), f32_sub(far_z, near_z)));
-
-    return result;
-}
-
-// Look-at view matrix
-static inline Mat4f mat4f_look_at(Vec3f eye, Vec3f center, Vec3f up) {
-    // Calculate forward vector
-    Vec3f forward = vec3f_sub(center, eye);
-    f32 forward_len = f32_from_native(sqrtf(f32_to_native(vec3f_length_squared(forward))));
-    forward = vec3f_create(
-        f32_div(forward.x, forward_len),
-        f32_div(forward.y, forward_len),
-        f32_div(forward.z, forward_len)
-    );
-
-    // Calculate right vector
-    Vec3f right = vec3f_cross(forward, up);
-    f32 right_len = f32_from_native(sqrtf(f32_to_native(vec3f_length_squared(right))));
-    right = vec3f_create(
-        f32_div(right.x, right_len),
-        f32_div(right.y, right_len),
-        f32_div(right.z, right_len)
-    );
-
-    // Calculate true up vector
-    Vec3f true_up = vec3f_cross(right, forward);
-
-    Mat4f result = mat4f_identity();
-
-    // Rotation part
-    result.cols[0].x = right.x;
-    result.cols[1].x = right.y;
-    result.cols[2].x = right.z;
-
-    result.cols[0].y = true_up.x;
-    result.cols[1].y = true_up.y;
-    result.cols[2].y = true_up.z;
-
-    result.cols[0].z = f32_neg(forward.x);
-    result.cols[1].z = f32_neg(forward.y);
-    result.cols[2].z = f32_neg(forward.z);
-
-    // Translation part
-    result.cols[3].x = f32_neg(vec3f_dot(right, eye));
-    result.cols[3].y = f32_neg(vec3f_dot(true_up, eye));
-    result.cols[3].z = vec3f_dot(forward, eye);
-
-    return result;
-}
-
-// Math constants for 3D graphics (F32_PI is already defined in types.h)
-#define F32_PI_2 f32_from_native(1.57079632679489661923f)
-#define F32_2PI f32_from_native(6.28318530717958647692f)
-
-// Helper function to convert degrees to radians
-static inline f32 f32_radians(f32 degrees) {
-    return f32_mul(degrees, f32_div(F32_PI, f32_from_native(180.0f)));
-}
-
-// =============================================================================
 // DEBUG UTILITIES
 // =============================================================================
 
@@ -546,12 +367,167 @@ static inline f32 f32_radians(f32 degrees) {
 void vec2f_debug_print(Vec2f v);
 void vec3f_debug_print(Vec3f v);
 void vec4f_debug_print(Vec4f v);
-void mat4f_debug_print(Mat4f m);
 #else
 #define vec2f_debug_print(v) ((void)0)
 #define vec3f_debug_print(v) ((void)0)
 #define vec4f_debug_print(v) ((void)0)
-#define mat4f_debug_print(m) ((void)0)
 #endif
+
+// =============================================================================
+// MAT4F OPERATIONS - Essential for 3D graphics transformations
+// =============================================================================
+
+// Create identity matrix
+static inline Mat4f mat4f_identity(void) {
+    Mat4f result = {
+        .cols = {
+            {F32_ONE,  F32_ZERO, F32_ZERO, F32_ZERO},  // Column 0: (1,0,0,0)
+            {F32_ZERO, F32_ONE,  F32_ZERO, F32_ZERO},  // Column 1: (0,1,0,0)
+            {F32_ZERO, F32_ZERO, F32_ONE,  F32_ZERO},  // Column 2: (0,0,1,0)
+            {F32_ZERO, F32_ZERO, F32_ZERO, F32_ONE}    // Column 3: (0,0,0,1)
+        }
+    };
+    return result;
+}
+
+// Matrix multiplication: C = A * B (column-major order)
+static inline Mat4f mat4f_multiply(const Mat4f* a, const Mat4f* b) {
+    Mat4f result;
+
+    // For each column of the result
+    for (int col = 0; col < 4; col++) {
+        // For each row of the result
+        for (int row = 0; row < 4; row++) {
+            f32 sum = F32_ZERO;
+
+            // Dot product of row 'row' of A with column 'col' of B
+            for (int k = 0; k < 4; k++) {
+                f32 a_elem = ((f32*)&a->cols[k])[row];  // A[row][k]
+                f32 b_elem = ((f32*)&b->cols[col])[k];  // B[k][col]
+                sum = f32_add(sum, f32_mul(a_elem, b_elem));
+            }
+
+            ((f32*)&result.cols[col])[row] = sum;  // result[row][col] = sum
+        }
+    }
+
+    return result;
+}
+
+// Transform a Vec4f by a Mat4f (matrix-vector multiplication)
+static inline Vec4f mat4f_mul_vec4f(const Mat4f* m, Vec4f v) {
+    return vec4f_create(
+        f32_add(f32_add(f32_mul(m->cols[0].x, v.x), f32_mul(m->cols[1].x, v.y)),
+                f32_add(f32_mul(m->cols[2].x, v.z), f32_mul(m->cols[3].x, v.w))),
+        f32_add(f32_add(f32_mul(m->cols[0].y, v.x), f32_mul(m->cols[1].y, v.y)),
+                f32_add(f32_mul(m->cols[2].y, v.z), f32_mul(m->cols[3].y, v.w))),
+        f32_add(f32_add(f32_mul(m->cols[0].z, v.x), f32_mul(m->cols[1].z, v.y)),
+                f32_add(f32_mul(m->cols[2].z, v.z), f32_mul(m->cols[3].z, v.w))),
+        f32_add(f32_add(f32_mul(m->cols[0].w, v.x), f32_mul(m->cols[1].w, v.y)),
+                f32_add(f32_mul(m->cols[2].w, v.z), f32_mul(m->cols[3].w, v.w)))
+    );
+}
+
+// Translation matrix
+static inline Mat4f mat4f_translate(f32 x, f32 y, f32 z) {
+    Mat4f result = mat4f_identity();
+    result.cols[3].x = x;  // Translation X
+    result.cols[3].y = y;  // Translation Y
+    result.cols[3].z = z;  // Translation Z
+    return result;
+}
+
+// Scale matrix
+static inline Mat4f mat4f_scale(f32 x, f32 y, f32 z) {
+    Mat4f result = mat4f_identity();
+    result.cols[0].x = x;  // Scale X
+    result.cols[1].y = y;  // Scale Y
+    result.cols[2].z = z;  // Scale Z
+    return result;
+}
+
+// Trigonometric functions (simple approximations for now)
+static inline f32 f32_sin(f32 radians) {
+    // Simple Taylor series approximation for sin(x)
+    // sin(x) ≈ x - x³/6 + x⁵/120 - x⁷/5040
+    float x = f32_to_native(radians);
+    float x2 = x * x;
+    float x3 = x2 * x;
+    float x5 = x3 * x2;
+    float result = x - (x3 / 6.0f) + (x5 / 120.0f);
+    return f32_from_native(result);
+}
+
+static inline f32 f32_cos(f32 radians) {
+    // Simple Taylor series approximation for cos(x)
+    // cos(x) ≈ 1 - x²/2 + x⁴/24 - x⁶/720
+    float x = f32_to_native(radians);
+    float x2 = x * x;
+    float x4 = x2 * x2;
+    float x6 = x4 * x2;
+    float result = 1.0f - (x2 / 2.0f) + (x4 / 24.0f) - (x6 / 720.0f);
+    return f32_from_native(result);
+}
+
+// Rotation matrix around Y axis (for cube spinning)
+static inline Mat4f mat4f_rotate_y(f32 radians) {
+    f32 cos_theta = f32_cos(radians);
+    f32 sin_theta = f32_sin(radians);
+
+    Mat4f result = mat4f_identity();
+    result.cols[0].x = cos_theta;   // [0][0] =  cos(θ)
+    result.cols[0].z = sin_theta;   // [0][2] =  sin(θ)
+    result.cols[2].x = f32_neg(sin_theta); // [2][0] = -sin(θ)
+    result.cols[2].z = cos_theta;   // [2][2] =  cos(θ)
+    return result;
+}
+
+// Perspective projection matrix (field of view in radians)
+static inline Mat4f mat4f_perspective(f32 fov_radians, f32 aspect_ratio, f32 near_plane, f32 far_plane) {
+    f32 tan_half_fov = f32_div(f32_sin(f32_div(fov_radians, f32_from_native(2.0f))),
+                               f32_cos(f32_div(fov_radians, f32_from_native(2.0f))));
+
+    f32 range = f32_sub(far_plane, near_plane);
+
+    Mat4f result = {.cols = {{F32_ZERO, F32_ZERO, F32_ZERO, F32_ZERO},
+                                     {F32_ZERO, F32_ZERO, F32_ZERO, F32_ZERO},
+                                     {F32_ZERO, F32_ZERO, F32_ZERO, F32_ZERO},
+                                     {F32_ZERO, F32_ZERO, F32_ZERO, F32_ZERO}}};
+
+    result.cols[0].x = f32_div(F32_ONE, f32_mul(aspect_ratio, tan_half_fov));  // [0][0]
+    result.cols[1].y = f32_div(F32_ONE, tan_half_fov);                         // [1][1]
+    result.cols[2].z = f32_neg(f32_div(f32_add(far_plane, near_plane), range)); // [2][2]
+    result.cols[2].w = f32_from_native(-1.0f);                                 // [2][3] = -1
+    result.cols[3].z = f32_neg(f32_div(f32_mul(f32_from_native(2.0f), f32_mul(far_plane, near_plane)), range)); // [3][2]
+
+    return result;
+}
+
+// Look-at view matrix (camera transformation)
+static inline Mat4f mat4f_look_at(Vec3f eye, Vec3f center, Vec3f up) {
+    Vec3f f = vec3f_sub(center, eye);  // Forward vector (unnormalized)
+    Vec3f s = vec3f_cross(f, up);      // Side vector (unnormalized)
+    Vec3f u = vec3f_cross(s, f);       // Up vector (unnormalized)
+
+    // Normalize vectors (simplified normalization)
+    f32 f_len = f32_from_native(sqrtf(f32_to_native(vec3f_length_squared(f))));
+    f32 s_len = f32_from_native(sqrtf(f32_to_native(vec3f_length_squared(s))));
+    f32 u_len = f32_from_native(sqrtf(f32_to_native(vec3f_length_squared(u))));
+
+    f = vec3f_mul_scalar(f, f32_div(F32_ONE, f_len));
+    s = vec3f_mul_scalar(s, f32_div(F32_ONE, s_len));
+    u = vec3f_mul_scalar(u, f32_div(F32_ONE, u_len));
+
+    Mat4f result = {
+        .cols = {
+            {s.x, u.x, f32_neg(f.x), F32_ZERO},
+            {s.y, u.y, f32_neg(f.y), F32_ZERO},
+            {s.z, u.z, f32_neg(f.z), F32_ZERO},
+            {f32_neg(vec3f_dot(s, eye)), f32_neg(vec3f_dot(u, eye)), vec3f_dot(f, eye), F32_ONE}
+        }
+    };
+
+    return result;
+}
 
 #endif // GIBGOCRAFT_MATH_H

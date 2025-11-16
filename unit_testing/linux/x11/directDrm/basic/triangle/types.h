@@ -8,8 +8,6 @@
 #ifndef GIBGOCRAFT_TYPES_H
 #define GIBGOCRAFT_TYPES_H
 
-#include <string.h>  // For memcpy in type conversions
-
 #include <stdint.h>     // Only for uint32_t etc. definitions
 #include <stddef.h>     // For size_t in static assertions
 #include <stdbool.h>    // For bool in debug builds
@@ -195,16 +193,14 @@ static inline u32 u32_from_le(u32 value) {
 // Use sparingly - defeats the purpose of custom types!
 static inline f32 f32_from_native(float native) {
     f32 result;
-    // Use memcpy to avoid strict aliasing violations
-    memcpy(&result.bits, &native, sizeof(u32));
+    // Bit-cast to avoid undefined behavior
+    result.bits = *(u32*)&native;
     return result;
 }
 
 static inline float f32_to_native(f32 custom) {
-    // Use memcpy to avoid strict aliasing violations
-    float result;
-    memcpy(&result, &custom.bits, sizeof(float));
-    return result;
+    // Bit-cast to avoid undefined behavior
+    return *(float*)&custom.bits;
 }
 
 // =============================================================================

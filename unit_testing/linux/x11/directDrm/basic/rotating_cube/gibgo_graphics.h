@@ -16,24 +16,11 @@ typedef enum {
     GIBGO_ERROR_INVALID_PARAMETER
 } GibgoGraphicsResult;
 
-// 2D Vertex structure for backwards compatibility
+// Vertex structure for 3D graphics - upgraded from 2D
 typedef struct {
-    Vec2f position;
+    Vec3f position;     // Changed from Vec2f to Vec3f for 3D coordinates
     Vec3f color;
 } GibgoVertex;
-
-// 3D Vertex structure for cube rendering
-typedef struct {
-    Vec3f position;    // 3D position
-    Vec3f color;       // RGB color
-} GibgoCubeVertex;
-
-// Transformation matrices structure for 3D rendering
-typedef struct {
-    Mat4f model;       // 64 bytes: model transformation matrix
-    Mat4f view;        // 64 bytes: view/camera transformation matrix
-    Mat4f projection;  // 64 bytes: perspective projection matrix
-} TransformMatrices;
 
 // Simplified graphics initialization parameters
 typedef struct {
@@ -76,17 +63,9 @@ GibgoGraphicsResult gibgo_upload_vertex_data(GibgoGraphicsSystem* system,
 // Rendering operations (replaces Vulkan command buffer recording)
 GibgoGraphicsResult gibgo_begin_frame(GibgoGraphicsSystem* system);
 GibgoGraphicsResult gibgo_draw_triangle(GibgoGraphicsSystem* system);
+GibgoGraphicsResult gibgo_draw_primitives(GibgoGraphicsSystem* system, u32 vertex_count, u32 first_vertex);
+GibgoGraphicsResult gibgo_set_uniform_buffer_data(GibgoGraphicsSystem* system, const void* data, u32 size);
 GibgoGraphicsResult gibgo_end_frame_and_present(GibgoGraphicsSystem* system);
-
-// 3D Cube rendering operations
-GibgoGraphicsResult gibgo_upload_cube_vertices(GibgoGraphicsSystem* system,
-                                              const GibgoCubeVertex* vertices, u32 vertex_count);
-GibgoGraphicsResult gibgo_set_mvp_matrices(GibgoGraphicsSystem* system,
-                                          const Mat4f* model, const Mat4f* view, const Mat4f* projection);
-GibgoGraphicsResult gibgo_draw_indexed_cube(GibgoGraphicsSystem* system,
-                                           const u16* indices, u32 index_count);
-GibgoGraphicsResult gibgo_enable_depth_testing(GibgoGraphicsSystem* system, b32 enable);
-GibgoGraphicsResult gibgo_clear_depth_buffer_3d(GibgoGraphicsSystem* system);
 
 // Synchronization (replaces Vulkan fences/semaphores)
 GibgoGraphicsResult gibgo_wait_for_frame_completion(GibgoGraphicsSystem* system);
