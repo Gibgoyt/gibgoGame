@@ -446,26 +446,22 @@ static inline Mat4f mat4f_scale(f32 x, f32 y, f32 z) {
     return result;
 }
 
-// Trigonometric functions (simple approximations for now)
+// Trigonometric functions (using accurate standard library functions)
 static inline f32 f32_sin(f32 radians) {
-    // Simple Taylor series approximation for sin(x)
-    // sin(x) ≈ x - x³/6 + x⁵/120 - x⁷/5040
+    // Use accurate standard library function instead of Taylor series approximation
+    // The previous Taylor series approximation was causing extreme inaccuracies at large angles,
+    // leading to degenerate MVP matrices and blank frames at specific rotation angles
     float x = f32_to_native(radians);
-    float x2 = x * x;
-    float x3 = x2 * x;
-    float x5 = x3 * x2;
-    float result = x - (x3 / 6.0f) + (x5 / 120.0f);
+    float result = sinf(x);
     return f32_from_native(result);
 }
 
 static inline f32 f32_cos(f32 radians) {
-    // Simple Taylor series approximation for cos(x)
-    // cos(x) ≈ 1 - x²/2 + x⁴/24 - x⁶/720
+    // Use accurate standard library function instead of Taylor series approximation
+    // The previous Taylor series approximation was causing extreme inaccuracies at large angles,
+    // leading to degenerate MVP matrices and blank frames at specific rotation angles
     float x = f32_to_native(radians);
-    float x2 = x * x;
-    float x4 = x2 * x2;
-    float x6 = x4 * x2;
-    float result = 1.0f - (x2 / 2.0f) + (x4 / 24.0f) - (x6 / 720.0f);
+    float result = cosf(x);
     return f32_from_native(result);
 }
 
