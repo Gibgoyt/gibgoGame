@@ -546,13 +546,25 @@ static TransformedVertex transform_vertex_to_screen(
                f32_gt(w_abs, F32_ZERO));
     }
 
-    // Add small epsilon tolerance for floating point precision issues
-    f32 epsilon = f32_from_float(0.1f);
-    f32 w_tolerance = f32_add(w_abs, epsilon);
+    // Step 3: Frustum clipping - test if vertex is inside view frustum
+    // TEMPORARY: Only test X/Y planes to isolate the Z-clipping issue
+    // Standard OpenGL clipping: vertex is inside if -w <= x,y <= w AND w > 0
+    b32 inside_frustum = f32_gt(w_abs, F32_ZERO) &&
+                         f32_le(f32_abs(clip_space.x), w_abs) &&
+                         f32_le(f32_abs(clip_space.y), w_abs);
+    // TODO: Fix Z-clipping - currently disabled to test X/Y only
 
-    // TEMPORARY: Disable all clipping to test triangle rasterization pipeline
-    // TODO: Re-enable proper clipping after confirming rasterization works
-    if (f32_gt(w_abs, F32_ZERO)) {
+    // Debug: Log clipping results for first few vertices
+    if (debug_count <= 6) {
+        printf("[CLIP DEBUG] Vertex %d frustum test: w>0? %d, |x|<=w? %d, |y|<=w? %d, [Z-TEST DISABLED] → %s\n",
+               debug_count-1,
+               f32_gt(w_abs, F32_ZERO),
+               f32_le(f32_abs(clip_space.x), w_abs),
+               f32_le(f32_abs(clip_space.y), w_abs),
+               inside_frustum ? "INSIDE" : "CLIPPED");
+    }
+
+    if (inside_frustum) {
         // Step 4: Perspective divide (clip space -> NDC)
         f32 w_inv = f32_div(F32_ONE, clip_space.w);
         f32 ndc_x = f32_mul(clip_space.x, w_inv);
@@ -567,10 +579,10 @@ static TransformedVertex transform_vertex_to_screen(
         // Store results
         result.position = vec3f_create(screen_x, screen_y, ndc_z);  // Keep NDC z for depth testing
         result.color = vertex->color;
-        result.is_valid = B32_TRUE;  // MARK ALL VERTICES AS VALID for testing
+        result.is_valid = B32_TRUE;  // Vertex passed all clipping tests
 
     } else {
-        // Only clip if W is zero or negative (invalid perspective)
+        // Vertex is outside view frustum (clipped)
         result.is_valid = B32_FALSE;
     }
 
