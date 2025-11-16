@@ -25,3 +25,4 @@ gdb.txt
 *.swp
 *.swo
 .*.tmptriangle_hardware
+triangle_hardware

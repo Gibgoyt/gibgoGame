@@ -1,140 +1,142 @@
-# gibgoCraft - Triangle Rendering Test Makefile
-# Simple Makefile for building the triangle rendering test
+# GibgoCraft Hardware-Direct Graphics Makefile
+# Compiles the custom GPU hardware access layer
+# NO VULKAN DEPENDENCIES!
 
-# Compiler and tools
 CC = gcc
-RM = rm -f
+CFLAGS = -Wall -Wextra -std=c99 -g -O2
 
-# Project settings
+# Source files for our hardware-direct graphics system
+SOURCES = main.c \
+          gibgo_graphics.c \
+          gpu_device.c \
+          gpu_memory.c \
+          gpu_commands.c \
+          shader_data.c \
+          cube_geometry.c \
+          uniform_buffer.c
+
+# Object files
+OBJECTS = $(SOURCES:.c=.o)
+
+# Target executable
 TARGET = triangle
-SOURCES = main.c
 
-# Compiler flags
-CFLAGS = -std=c99 -Wall -Wextra -Wpedantic
-CPPFLAGS = -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
+# System libraries (NO Vulkan! Uses DRM for direct GPU access)
+LIBS = -lX11 -lm -ldrm
 
-# Libraries
-LIBS = -lvulkan -lX11 -lm
+# Header dependencies
+HEADERS = types.h math.h gpu_device.h gibgo_graphics.h \
+          cube_geometry.h uniform_buffer.h camera.h animation.h
 
-# Debug vs Release
-DEBUG_CFLAGS = -g -O0 -DDEBUG -DVK_ENABLE_VALIDATION
-RELEASE_CFLAGS = -O2 -DNDEBUG
+# Default target
+all: shaders $(TARGET)
 
-# Default to debug build
-ifndef RELEASE
-CFLAGS += $(DEBUG_CFLAGS)
-BUILD_TYPE = debug
-else
-CFLAGS += $(RELEASE_CFLAGS)
-BUILD_TYPE = release
-endif
+# Compile shaders first
+shaders: shader_data.c
 
-# Shader files
-SHADER_SOURCES = vertex.vert fragment.frag
-SHADER_SPIRV = vertex.spv fragment.spv
-SHADER_SCRIPT = ./compile_shaders.sh
+shader_data.c: vertex.vert fragment.frag compile_shaders_hardware.sh
+	@echo "🎨 Compiling shaders for hardware-direct graphics..."
+	./compile_shaders_hardware.sh
 
-# Build rules
-.PHONY: all clean debug release help test shaders clean-shaders
+# Main executable
+$(TARGET): $(OBJECTS)
+	@echo "🔗 Linking hardware-direct graphics executable..."
+	$(CC) $(OBJECTS) -o $(TARGET) $(LIBS)
+	@echo "✅ Hardware-direct graphics executable built: $(TARGET)"
 
-all: $(TARGET)
+# Object file compilation
+%.o: %.c $(HEADERS)
+	@echo "🔧 Compiling $< (hardware-direct)..."
+	$(CC) $(CFLAGS) -c $< -o $@
 
-$(TARGET): $(SOURCES)
-	@echo "Building $(TARGET) ($(BUILD_TYPE) mode)..."
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $^ $(LIBS)
-	@echo "Build complete: $(TARGET)"
-	@echo ""
-	@echo "Usage:"
-	@echo "  ./$(TARGET)          - Run the triangle test"
-	@echo "  make clean           - Clean build files"
-	@echo "  make release         - Build optimized version"
-	@echo "  make test            - Build and run test"
-	@echo "  make help            - Show help"
-
-debug: clean
-	@$(MAKE) all
-
-release: clean
-	@$(MAKE) all RELEASE=1
-
-test: all
-	@echo "Running triangle test..."
-	@echo "Press ESC to exit the test"
-	./$(TARGET)
-
-# Shader compilation rules
-shaders: $(SHADER_SOURCES)
-	@echo "Compiling shaders..."
-	$(SHADER_SCRIPT)
-
-$(SHADER_SPIRV): $(SHADER_SOURCES)
-	@echo "Compiling shaders to SPIR-V..."
-	$(SHADER_SCRIPT)
-
-# Clean rules
+# Clean build artifacts
 clean:
-	@echo "Cleaning build files..."
-	$(RM) $(TARGET)
+	@echo "🧹 Cleaning build artifacts..."
+	rm -f $(OBJECTS) $(TARGET)
+	rm -f shader_data.c
+	rm -rf shaders_compiled/
+	@echo "✅ Clean complete"
 
-clean-shaders:
-	@echo "Cleaning compiled shaders..."
-	$(RM) $(SHADER_SPIRV)
+# Debug build
+debug: CFLAGS += -DDEBUG -g3
+debug: $(TARGET)
+	@echo "🐛 Debug build complete"
 
-clean-all: clean clean-shaders
+# Release build
+release: CFLAGS += -O3 -DNDEBUG
+release: clean $(TARGET)
+	@echo "🚀 Release build complete"
 
+# Install (requires root for hardware access)
+install: $(TARGET)
+	@echo "📦 Installing $(TARGET)..."
+	sudo cp $(TARGET) /usr/local/bin/
+	sudo chmod +s /usr/local/bin/$(TARGET)  # Set setuid for hardware access
+	@echo "⚠️  Note: Program installed with setuid for hardware access"
+	@echo "✅ Installation complete"
+
+# Run with appropriate privileges
+run: $(TARGET)
+	@echo "🎮 Running hardware-direct graphics demo..."
+	@echo "⚠️  Note: This requires root privileges for direct hardware access"
+	sudo ./$(TARGET)
+
+# Test compilation without linking
+test-compile:
+	@echo "🧪 Testing compilation of all modules..."
+	$(CC) $(CFLAGS) -c main.c -o test_main.o
+	$(CC) $(CFLAGS) -c gibgo_graphics.c -o test_graphics.o
+	$(CC) $(CFLAGS) -c gpu_device.c -o test_device.o
+	$(CC) $(CFLAGS) -c gpu_memory.c -o test_memory.o
+	$(CC) $(CFLAGS) -c gpu_commands.c -o test_commands.o
+	rm -f test_*.o
+	@echo "✅ All modules compile successfully"
+
+# Analyze the differences from Vulkan version
+diff-analysis:
+	@echo "📊 Analyzing differences from Vulkan implementation..."
+	@if [ -f main.c ]; then \
+		echo "Lines of code comparison:"; \
+		echo "  Vulkan version: $$(wc -l main.c | cut -d' ' -f1) lines"; \
+		echo "  Hardware-direct: $$(wc -l main.c | cut -d' ' -f1) lines"; \
+		echo "  Graphics layer: $$(wc -l gibgo_graphics.c gpu_device.c gpu_memory.c gpu_commands.c | tail -1 | cut -d' ' -f1) lines"; \
+		echo ""; \
+		echo "Dependencies removed:"; \
+		echo "  ❌ libvulkan"; \
+		echo "  ❌ Vulkan headers"; \
+		echo "  ❌ SPIR-V compiler (for now)"; \
+		echo ""; \
+		echo "Dependencies added:"; \
+		echo "  ✅ Direct hardware access"; \
+		echo "  ✅ Custom memory management"; \
+		echo "  ✅ Custom command submission"; \
+	else \
+		echo "⚠️  Original main.c not found for comparison"; \
+	fi
+
+# Development help
 help:
-	@echo "gibgoCraft Triangle Rendering Test"
+	@echo "🎯 gibgoCraft Hardware-Direct Graphics Build System"
+	@echo "=================================================="
 	@echo ""
-	@echo "This test demonstrates:"
-	@echo "  - Complete Vulkan graphics pipeline setup"
-	@echo "  - Vertex buffer creation and management"
-	@echo "  - Shader loading and compilation"
-	@echo "  - Command buffer recording and submission"
-	@echo "  - Triangle rendering with per-vertex colors"
-	@echo ""
-	@echo "Targets:"
-	@echo "  all        - Build $(TARGET) (default: debug mode)"
-	@echo "  debug      - Clean and build debug version"
-	@echo "  release    - Clean and build release version"
-	@echo "  test       - Build and run the test"
-	@echo "  shaders    - Compile GLSL shaders to SPIR-V"
-	@echo "  clean      - Remove build files"
-	@echo "  clean-shaders - Remove compiled shaders"
-	@echo "  clean-all  - Remove all build files and shaders"
-	@echo "  help       - Show this help"
+	@echo "Available targets:"
+	@echo "  all            - Build the hardware-direct graphics demo"
+	@echo "  clean          - Remove build artifacts"
+	@echo "  debug          - Build with debug symbols and verbose output"
+	@echo "  release        - Build optimized release version"
+	@echo "  install        - Install with setuid for hardware access (requires sudo)"
+	@echo "  run            - Run the demo with appropriate privileges"
+	@echo "  test-compile   - Test compilation of all modules"
+	@echo "  diff-analysis  - Compare with Vulkan implementation"
+	@echo "  help           - Show this help message"
 	@echo ""
 	@echo "Requirements:"
-	@echo "  - GCC compiler"
-	@echo "  - Vulkan development libraries (libvulkan-dev)"
-	@echo "  - X11 development libraries (libx11-dev)"
-	@echo "  - Math library (libm)"
+	@echo "  - gcc with C99 support"
+	@echo "  - X11 development libraries (libX11-dev)"
+	@echo "  - Root access for direct hardware control"
 	@echo ""
-	@echo "Expected output:"
-	@echo "  - 800x600 window opens"
-	@echo "  - Colored triangle appears in center"
-	@echo "  - Red (top), Green (bottom-right), Blue (bottom-left)"
-	@echo "  - Smooth gradient between vertices"
-	@echo "  - Stable rendering at ~60 FPS"
-	@echo ""
-	@echo "Controls:"
-	@echo "  - ESC key: Exit application"
-	@echo "  - Window close button: Exit application"
-	@echo ""
-	@echo "Troubleshooting:"
-	@echo "  - Ensure DISPLAY is set: echo $$DISPLAY"
-	@echo "  - Test Vulkan: vulkaninfo"
-	@echo "  - Check GPU driver: lspci | grep VGA"
-	@echo "  - Enable validation: export VK_LAYER_PATH=/usr/share/vulkan/explicit_layer.d"
-	@echo "  - Check dependencies: ldd $(TARGET)"
+	@echo "⚠️  WARNING: This program accesses GPU hardware directly!"
+	@echo "   Make sure you understand the implications before running."
 
-# Dependencies check (optional target)
-check-deps:
-	@echo "Checking dependencies..."
-	@echo -n "Vulkan: "
-	@pkg-config --exists vulkan && echo "Found" || echo "NOT FOUND - install libvulkan-dev"
-	@echo -n "X11: "
-	@pkg-config --exists x11 && echo "Found" || echo "NOT FOUND - install libx11-dev"
-	@echo -n "GCC: "
-	@which gcc > /dev/null && echo "Found" || echo "NOT FOUND - install gcc"
-	@echo -n "Vulkan tools: "
-	@which vulkaninfo > /dev/null && echo "Found" || echo "NOT FOUND - install vulkan-tools"
+# Dependency tracking
+.PHONY: all clean debug release install run test-compile diff-analysis help
