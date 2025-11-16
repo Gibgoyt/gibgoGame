@@ -34,20 +34,44 @@ GibgoResult gibgo_allocate_gpu_memory(GibgoGPUDevice* device, u64 size, u64* out
     // Align size to GPU memory requirements
     u64 aligned_size = align_gpu_memory(size, GPU_MEMORY_ALIGNMENT);
 
-    // Check if we have enough VRAM available
-    if (device->vram_allocation_offset + aligned_size > device->vram.size) {
-        GPU_ERROR("Out of VRAM: requested %lu bytes, available %lu bytes",
-                  aligned_size, device->vram.size - device->vram_allocation_offset);
+    // Check if we have enough memory pool space available
+    if (device->memory_pool.pool_used + aligned_size > device->memory_pool.pool_size) {
+        GPU_ERROR("Out of memory pool: requested %lu bytes, available %lu bytes",
+                  aligned_size, device->memory_pool.pool_size - device->memory_pool.pool_used);
         return GIBGO_RESULT_ERROR_OUT_OF_MEMORY;
     }
 
-    // Calculate the GPU address for this allocation
+    // Check if we have tracking slots available
+    if (device->memory_pool.allocation_count >= 256) {
+        GPU_ERROR("Too many allocations: maximum 256 allocations supported");
+        return GIBGO_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+
+    // Find an unused allocation slot
+    u32 slot_index = 0;
+    for (u32 i = 0; i < 256; i++) {
+        if (!device->memory_pool.allocations[i].in_use) {
+            slot_index = i;
+            break;
+        }
+    }
+
+    // Calculate the GPU address (virtual) and CPU pointer (real)
     u64 gpu_address = device->vram.physical_address + device->vram_allocation_offset;
+    u8* cpu_pointer = device->memory_pool.pool_memory + device->memory_pool.pool_used;
 
-    GPU_LOG(device, "Allocated %lu bytes of GPU memory at 0x%016lX", aligned_size, gpu_address);
+    // Record the allocation
+    device->memory_pool.allocations[slot_index].gpu_address = gpu_address;
+    device->memory_pool.allocations[slot_index].cpu_pointer = cpu_pointer;
+    device->memory_pool.allocations[slot_index].size = aligned_size;
+    device->memory_pool.allocations[slot_index].in_use = B32_TRUE;
 
-    // Update allocation offset
-    device->vram_allocation_offset += aligned_size;
+    // Update allocation tracking
+    device->memory_pool.pool_used += aligned_size;
+    device->memory_pool.allocation_count++;
+    device->vram_allocation_offset += aligned_size; // Keep virtual address tracking
+
+    GPU_LOG(device, "Allocated %lu bytes of GPU memory at 0x%016lX (CPU: %p)", aligned_size, gpu_address, cpu_pointer);
 
     *out_address = gpu_address;
     return GIBGO_RESULT_SUCCESS;
@@ -68,43 +92,56 @@ GibgoResult gibgo_free_gpu_memory(GibgoGPUDevice* device, u64 address, u64 size)
 }
 
 // Map GPU memory to CPU-accessible address space
-// SIMPLIFIED IMPLEMENTATION: For educational purposes, we'll use malloc for GPU "memory"
-// In a real implementation, this would use proper DRM buffer mapping
+// This returns a pointer to the persistent memory allocation for the given GPU address
 GibgoResult gibgo_map_gpu_memory(GibgoGPUDevice* device, u64 gpu_address, u64 size, u8** out_cpu_address) {
     if (!device || !out_cpu_address || size == 0) {
         return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
     }
 
-    // For this educational implementation, we'll use CPU memory to simulate GPU memory mapping
-    // This allows the 3D graphics pipeline to work without complex DRM buffer management
-    void* mapped_address = malloc(size);
-    if (!mapped_address) {
-        GPU_ERROR("Failed to allocate CPU memory to simulate GPU mapping (size: %lu)", size);
-        return GIBGO_RESULT_ERROR_OUT_OF_MEMORY;
+    // Find the allocation that corresponds to this GPU address
+    for (u32 i = 0; i < 256; i++) {
+        if (device->memory_pool.allocations[i].in_use &&
+            device->memory_pool.allocations[i].gpu_address == gpu_address) {
+
+            // Verify the requested size doesn't exceed the allocation
+            if (size > device->memory_pool.allocations[i].size) {
+                GPU_ERROR("Map size %lu exceeds allocation size %lu for address 0x%016lX",
+                          size, device->memory_pool.allocations[i].size, gpu_address);
+                return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
+            }
+
+            u8* cpu_pointer = device->memory_pool.allocations[i].cpu_pointer;
+            GPU_LOG(device, "Mapped GPU memory 0x%016lX (%lu bytes) to persistent CPU address %p",
+                    gpu_address, size, cpu_pointer);
+
+            *out_cpu_address = cpu_pointer;
+            return GIBGO_RESULT_SUCCESS;
+        }
     }
 
-    // Zero-initialize the memory
-    memset(mapped_address, 0, size);
-
-    GPU_LOG(device, "Simulated GPU memory mapping 0x%016lX (%lu bytes) to CPU address %p",
-            gpu_address, size, mapped_address);
-
-    *out_cpu_address = (u8*)mapped_address;
-    return GIBGO_RESULT_SUCCESS;
+    GPU_ERROR("GPU address 0x%016lX not found in allocations", gpu_address);
+    return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
 }
 
 // Unmap GPU memory from CPU address space
-// SIMPLIFIED IMPLEMENTATION: Free the malloc'd memory used for simulation
+// This just releases the mapping, but keeps the persistent memory intact
 GibgoResult gibgo_unmap_gpu_memory(GibgoGPUDevice* device, u8* cpu_address, u64 size) {
     if (!device || !cpu_address) {
         return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
     }
 
-    // For our simplified implementation, free the malloc'd memory
-    free(cpu_address);
+    // Verify this CPU address belongs to one of our allocations
+    for (u32 i = 0; i < 256; i++) {
+        if (device->memory_pool.allocations[i].in_use &&
+            device->memory_pool.allocations[i].cpu_pointer == cpu_address) {
 
-    GPU_LOG(device, "Freed simulated GPU memory at %p (%lu bytes)", cpu_address, size);
-    return GIBGO_RESULT_SUCCESS;
+            GPU_LOG(device, "Unmapped GPU memory at %p (%lu bytes) - data remains persistent", cpu_address, size);
+            return GIBGO_RESULT_SUCCESS;
+        }
+    }
+
+    GPU_ERROR("CPU address %p not found in persistent allocations", cpu_address);
+    return GIBGO_RESULT_ERROR_INVALID_PARAMETER;
 }
 
 // Context management implementation

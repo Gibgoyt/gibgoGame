@@ -1,5 +1,8 @@
 #define _GNU_SOURCE  // Enable usleep and other POSIX extensions
 #include "gpu_device.h"
+#include "math.h"          // For Vec3f, Vec4f, Mat4f structures
+#include "gibgo_graphics.h" // For GibgoVertex structure
+#include "uniform_buffer.h" // For UniformBuffer structure
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -438,6 +441,226 @@ static void execute_3d_cube_rendering(GibgoGPUDevice* device, GibgoGPUCommand* c
     }
 }
 
+// ==============================================================================
+// 3D GRAPHICS PIPELINE - Full vertex transformation and rasterization
+// ==============================================================================
+
+// Missing math utility functions for the custom math library
+#define F32_HALF        ((f32){.bits = 0x3F000000})  // 0.5
+
+static inline f32 f32_from_u32(u32 value) {
+    return f32_from_native((float)value);
+}
+
+static inline f32 f32_from_i32(i32 value) {
+    return f32_from_native((float)value);
+}
+
+static inline f32 f32_from_float(float value) {
+    return f32_from_native(value);
+}
+
+static inline f32 f32_min(f32 a, f32 b) {
+    return f32_lt(a, b) ? a : b;
+}
+
+static inline f32 f32_max(f32 a, f32 b) {
+    return f32_gt(a, b) ? a : b;
+}
+
+static inline f32 f32_clamp(f32 value, f32 min_val, f32 max_val) {
+    return f32_min(f32_max(value, min_val), max_val);
+}
+
+static inline bool f32_le(f32 a, f32 b) {
+    return f32_lt(a, b) || f32_eq(a, b);
+}
+
+static inline bool f32_ge(f32 a, f32 b) {
+    return f32_gt(a, b) || f32_eq(a, b);
+}
+
+// Structure to hold a transformed vertex with screen coordinates
+typedef struct {
+    Vec3f position;      // Screen coordinates (x, y) + depth (z)
+    Vec3f color;        // Interpolated color
+    b32 is_valid;       // False if vertex was clipped
+} TransformedVertex;
+
+// Transform a 3D vertex through the complete graphics pipeline
+// Input: 3D world space vertex, MVP matrix, screen dimensions
+// Output: 2D screen coordinates + depth
+static TransformedVertex transform_vertex_to_screen(
+    const GibgoVertex* vertex,
+    const Mat4f* mvp,
+    u32 screen_width, u32 screen_height)
+{
+    TransformedVertex result = {0};
+
+    // Step 1: Convert Vec3f to Vec4f (add w=1 for proper matrix multiplication)
+    Vec4f vertex_pos = vec4f_create(vertex->position.x, vertex->position.y, vertex->position.z, F32_ONE);
+
+    // Step 2: Transform to clip space using MVP matrix
+    Vec4f clip_space = mat4f_mul_vec4f(mvp, vertex_pos);
+
+    // Debug: Log clip space coordinates for first few vertices
+    static u32 debug_count = 0;
+    if (debug_count < 6) {
+        printf("[CLIP DEBUG] Vertex %d: world[%.3f, %.3f, %.3f] → clip[%.3f, %.3f, %.3f, %.3f]\n",
+               debug_count,
+               f32_to_native(vertex->position.x), f32_to_native(vertex->position.y), f32_to_native(vertex->position.z),
+               f32_to_native(clip_space.x), f32_to_native(clip_space.y), f32_to_native(clip_space.z), f32_to_native(clip_space.w));
+        debug_count++;
+    }
+
+    // Step 3: Check if vertex is within clip volume (basic clipping)
+    f32 w_abs = f32_abs(clip_space.w);
+
+    // Debug the clipping test components
+    if (debug_count <= 6) {
+        printf("[CLIP DEBUG] w_abs=%.3f, |x|=%.3f, |y|=%.3f, |z|=%.3f\n",
+               f32_to_native(w_abs),
+               f32_to_native(f32_abs(clip_space.x)),
+               f32_to_native(f32_abs(clip_space.y)),
+               f32_to_native(f32_abs(clip_space.z)));
+        printf("[CLIP DEBUG] Tests: w>0? %d, [CLIPPING DISABLED - ALL VALID]\n",
+               f32_gt(w_abs, F32_ZERO));
+    }
+
+    // Add small epsilon tolerance for floating point precision issues
+    f32 epsilon = f32_from_float(0.1f);
+    f32 w_tolerance = f32_add(w_abs, epsilon);
+
+    // TEMPORARY: Disable all clipping to test triangle rasterization pipeline
+    // TODO: Re-enable proper clipping after confirming rasterization works
+    if (f32_gt(w_abs, F32_ZERO)) {
+        // Step 4: Perspective divide (clip space -> NDC)
+        f32 w_inv = f32_div(F32_ONE, clip_space.w);
+        f32 ndc_x = f32_mul(clip_space.x, w_inv);
+        f32 ndc_y = f32_mul(clip_space.y, w_inv);
+        f32 ndc_z = f32_mul(clip_space.z, w_inv);
+
+        // Step 5: Viewport transform (NDC -> screen coordinates)
+        // NDC is in [-1, 1] range, convert to [0, width] and [0, height]
+        f32 screen_x = f32_mul(f32_add(f32_mul(ndc_x, F32_HALF), F32_HALF), f32_from_u32(screen_width));
+        f32 screen_y = f32_mul(f32_sub(F32_ONE, f32_add(f32_mul(ndc_y, F32_HALF), F32_HALF)), f32_from_u32(screen_height));
+
+        // Store results
+        result.position = vec3f_create(screen_x, screen_y, ndc_z);  // Keep NDC z for depth testing
+        result.color = vertex->color;
+        result.is_valid = B32_TRUE;  // MARK ALL VERTICES AS VALID for testing
+
+    } else {
+        // Only clip if W is zero or negative (invalid perspective)
+        result.is_valid = B32_FALSE;
+    }
+
+    return result;
+}
+
+// Check if a point is inside a triangle using barycentric coordinates
+static b32 point_in_triangle_barycentric(f32 px, f32 py, f32 x1, f32 y1, f32 x2, f32 y2, f32 x3, f32 y3,
+                                         f32* out_u, f32* out_v, f32* out_w)
+{
+    // Calculate triangle edge vectors
+    f32 v0x = f32_sub(x3, x1);  // C - A
+    f32 v0y = f32_sub(y3, y1);
+    f32 v1x = f32_sub(x2, x1);  // B - A
+    f32 v1y = f32_sub(y2, y1);
+    f32 v2x = f32_sub(px, x1);  // P - A
+    f32 v2y = f32_sub(py, y1);
+
+    // Calculate dot products
+    f32 dot00 = f32_add(f32_mul(v0x, v0x), f32_mul(v0y, v0y));
+    f32 dot01 = f32_add(f32_mul(v0x, v1x), f32_mul(v0y, v1y));
+    f32 dot02 = f32_add(f32_mul(v0x, v2x), f32_mul(v0y, v2y));
+    f32 dot11 = f32_add(f32_mul(v1x, v1x), f32_mul(v1y, v1y));
+    f32 dot12 = f32_add(f32_mul(v1x, v2x), f32_mul(v1y, v2y));
+
+    // Calculate barycentric coordinates
+    f32 denom = f32_sub(f32_mul(dot00, dot11), f32_mul(dot01, dot01));
+    if (f32_le(f32_abs(denom), f32_from_float(0.000001f))) {
+        return B32_FALSE;  // Degenerate triangle
+    }
+
+    f32 inv_denom = f32_div(F32_ONE, denom);
+    f32 u = f32_mul(f32_sub(f32_mul(dot11, dot02), f32_mul(dot01, dot12)), inv_denom);
+    f32 v = f32_mul(f32_sub(f32_mul(dot00, dot12), f32_mul(dot01, dot02)), inv_denom);
+    f32 w = f32_sub(F32_ONE, f32_add(u, v));
+
+    // Check if point is in triangle
+    b32 inside = (f32_ge(u, F32_ZERO) && f32_ge(v, F32_ZERO) && f32_ge(w, F32_ZERO));
+
+    if (inside) {
+        *out_u = u;
+        *out_v = v;
+        *out_w = w;
+    }
+
+    return inside;
+}
+
+// Interpolate color across triangle surface using barycentric coordinates
+static Vec3f interpolate_triangle_color(const Vec3f* c1, const Vec3f* c2, const Vec3f* c3,
+                                       f32 u, f32 v, f32 w)
+{
+    // Color = u*c3 + v*c2 + w*c1 (note: u,v,w correspond to vertices 3,2,1 respectively)
+    Vec3f result;
+    result.x = f32_add(f32_add(f32_mul(u, c3->x), f32_mul(v, c2->x)), f32_mul(w, c1->x));
+    result.y = f32_add(f32_add(f32_mul(u, c3->y), f32_mul(v, c2->y)), f32_mul(w, c1->y));
+    result.z = f32_add(f32_add(f32_mul(u, c3->z), f32_mul(v, c2->z)), f32_mul(w, c1->z));
+    return result;
+}
+
+// Rasterize a single triangle with color interpolation
+static void rasterize_triangle(
+    u32* framebuffer, u32 width, u32 height,
+    const TransformedVertex* v1, const TransformedVertex* v2, const TransformedVertex* v3)
+{
+    // Calculate triangle bounding box for efficient rasterization
+    f32 min_x = f32_min(f32_min(v1->position.x, v2->position.x), v3->position.x);
+    f32 max_x = f32_max(f32_max(v1->position.x, v2->position.x), v3->position.x);
+    f32 min_y = f32_min(f32_min(v1->position.y, v2->position.y), v3->position.y);
+    f32 max_y = f32_max(f32_max(v1->position.y, v2->position.y), v3->position.y);
+
+    // Convert to integer pixel bounds
+    i32 start_x = (i32)f32_to_native(f32_max(min_x, F32_ZERO));
+    i32 end_x   = (i32)f32_to_native(f32_min(max_x, f32_from_u32(width - 1)));
+    i32 start_y = (i32)f32_to_native(f32_max(min_y, F32_ZERO));
+    i32 end_y   = (i32)f32_to_native(f32_min(max_y, f32_from_u32(height - 1)));
+
+    // Rasterize triangle by testing each pixel in bounding box
+    for (i32 y = start_y; y <= end_y; y++) {
+        for (i32 x = start_x; x <= end_x; x++) {
+            f32 pixel_x = f32_from_i32(x);
+            f32 pixel_y = f32_from_i32(y);
+
+            f32 u, v, w;
+            if (point_in_triangle_barycentric(pixel_x, pixel_y,
+                                            v1->position.x, v1->position.y,
+                                            v2->position.x, v2->position.y,
+                                            v3->position.x, v3->position.y,
+                                            &u, &v, &w)) {
+
+                // Interpolate color
+                Vec3f pixel_color = interpolate_triangle_color(&v1->color, &v2->color, &v3->color, u, v, w);
+
+                // Convert color to RGB format (0xAARRGGBB)
+                u32 r = (u32)(f32_to_native(f32_clamp(pixel_color.x, F32_ZERO, F32_ONE)) * 255.0f);
+                u32 g = (u32)(f32_to_native(f32_clamp(pixel_color.y, F32_ZERO, F32_ONE)) * 255.0f);
+                u32 b = (u32)(f32_to_native(f32_clamp(pixel_color.z, F32_ZERO, F32_ONE)) * 255.0f);
+                u32 final_color = 0xFF000000 | (r << 16) | (g << 8) | b;
+
+                // Write pixel to framebuffer
+                u32 pixel_index = y * width + x;
+                if (pixel_index < width * height) {
+                    framebuffer[pixel_index] = final_color;
+                }
+            }
+        }
+    }
+}
+
 // Core 3D software rasterizer implementation
 // Note: This is a simplified educational implementation - in reality, this would be done by GPU hardware
 static void render_3d_cube_software(GibgoGPUDevice* device, u32* framebuffer, u32 width, u32 height,
@@ -447,44 +670,98 @@ static void render_3d_cube_software(GibgoGPUDevice* device, u32* framebuffer, u3
     GPU_LOG(device, "🎨 Rendering 3D cube: %u vertices from %u, buffers at 0x%lX, 0x%lX",
             vertex_count, first_vertex, vertex_buffer_addr, uniform_buffer_addr);
 
-    // For our simplified demo, we'll render a basic animated wireframe cube
-    // In a real implementation, this would:
-    // 1. Load vertex data from vertex_buffer_addr
-    // 2. Load MVP matrix from uniform_buffer_addr
-    // 3. Transform vertices using MVP matrix
-    // 4. Rasterize triangles with depth testing
-    // 5. Interpolate colors across triangle surfaces
+    // Step 1: Load vertex data from GPU memory
+    u8* vertex_memory = NULL;
+    u64 vertex_buffer_size = vertex_count * sizeof(GibgoVertex);
+    GibgoResult result = gibgo_map_gpu_memory(device, vertex_buffer_addr, vertex_buffer_size, &vertex_memory);
 
-    // Simple rotating cube visualization (placeholder implementation)
-    // This shows that our command execution system works
-    static float rotation = 0.0f;
-    rotation += 0.02f; // Increment rotation each frame
+    if (result != GIBGO_RESULT_SUCCESS || !vertex_memory) {
+        GPU_LOG(device, "❌ Failed to map vertex buffer memory");
+        return;
+    }
 
-    // Draw a simple wireframe cube to show the system is working
-    u32 cube_color = 0xFF00FF00; // Green wireframe
-    u32 center_x = width / 2;
-    u32 center_y = height / 2;
-    u32 size = 100;
+    GibgoVertex* vertices = (GibgoVertex*)vertex_memory;
 
-    // Draw rotating wireframe cube (8 vertices, 12 edges)
-    for (int edge = 0; edge < 12; edge++) {
-        // Simplified wireframe edge drawing
-        u32 x1 = center_x + (u32)(size * cosf(rotation + edge * 0.5f));
-        u32 y1 = center_y + (u32)(size * sinf(rotation + edge * 0.3f));
-        u32 x2 = center_x + (u32)(size * cosf(rotation + edge * 0.5f + 0.8f));
-        u32 y2 = center_y + (u32)(size * sinf(rotation + edge * 0.3f + 0.6f));
+    // Step 2: Load uniform buffer (MVP matrix) from GPU memory
+    u8* uniform_memory = NULL;
+    u64 uniform_buffer_size = sizeof(GibgoUniformBuffer);
+    result = gibgo_map_gpu_memory(device, uniform_buffer_addr, uniform_buffer_size, &uniform_memory);
 
-        // Simple line drawing (Bresenham's algorithm simplified)
-        if (x1 < width && y1 < height && x2 < width && y2 < height) {
-            framebuffer[y1 * width + x1] = cube_color;
-            framebuffer[y2 * width + x2] = cube_color;
+    if (result != GIBGO_RESULT_SUCCESS || !uniform_memory) {
+        GPU_LOG(device, "❌ Failed to map uniform buffer memory");
+        gibgo_unmap_gpu_memory(device, vertex_memory, vertex_buffer_size);
+        return;
+    }
+
+    GibgoUniformBuffer* uniforms = (GibgoUniformBuffer*)uniform_memory;
+    Mat4f* mvp = &uniforms->mvp_matrix;
+
+    // Debug: Log MVP matrix for verification
+    GPU_LOG(device, "🔍 MVP Matrix Debug:");
+    GPU_LOG(device, "  Col 0: [%.3f, %.3f, %.3f, %.3f]",
+            f32_to_native(mvp->cols[0].x), f32_to_native(mvp->cols[0].y),
+            f32_to_native(mvp->cols[0].z), f32_to_native(mvp->cols[0].w));
+    GPU_LOG(device, "  Col 1: [%.3f, %.3f, %.3f, %.3f]",
+            f32_to_native(mvp->cols[1].x), f32_to_native(mvp->cols[1].y),
+            f32_to_native(mvp->cols[1].z), f32_to_native(mvp->cols[1].w));
+    GPU_LOG(device, "  Col 2: [%.3f, %.3f, %.3f, %.3f]",
+            f32_to_native(mvp->cols[2].x), f32_to_native(mvp->cols[2].y),
+            f32_to_native(mvp->cols[2].z), f32_to_native(mvp->cols[2].w));
+    GPU_LOG(device, "  Col 3: [%.3f, %.3f, %.3f, %.3f]",
+            f32_to_native(mvp->cols[3].x), f32_to_native(mvp->cols[3].y),
+            f32_to_native(mvp->cols[3].z), f32_to_native(mvp->cols[3].w));
+
+    GPU_LOG(device, "📊 Processing %u vertices as %u triangles with real 3D pipeline",
+            vertex_count, vertex_count / 3);
+
+    // Step 3: Process triangles (every 3 vertices = 1 triangle)
+    u32 triangles_rendered = 0;
+    u32 triangles_clipped = 0;
+
+    for (u32 i = first_vertex; i < vertex_count; i += 3) {
+        // Ensure we have 3 vertices for a complete triangle
+        if (i + 2 >= vertex_count) break;
+
+        // Get triangle vertices
+        const GibgoVertex* v1 = &vertices[i];
+        const GibgoVertex* v2 = &vertices[i + 1];
+        const GibgoVertex* v3 = &vertices[i + 2];
+
+        // Step 4: Transform vertices through 3D pipeline
+        TransformedVertex tv1 = transform_vertex_to_screen(v1, mvp, width, height);
+        TransformedVertex tv2 = transform_vertex_to_screen(v2, mvp, width, height);
+        TransformedVertex tv3 = transform_vertex_to_screen(v3, mvp, width, height);
+
+        // Debug: Log first triangle transformation details
+        if (triangles_rendered == 0 && triangles_clipped == 0) {
+            GPU_LOG(device, "🔬 First Triangle Debug:");
+            GPU_LOG(device, "  V1 world: [%.3f, %.3f, %.3f] → valid: %d",
+                    f32_to_native(v1->position.x), f32_to_native(v1->position.y), f32_to_native(v1->position.z), tv1.is_valid);
+            GPU_LOG(device, "  V2 world: [%.3f, %.3f, %.3f] → valid: %d",
+                    f32_to_native(v2->position.x), f32_to_native(v2->position.y), f32_to_native(v2->position.z), tv2.is_valid);
+            GPU_LOG(device, "  V3 world: [%.3f, %.3f, %.3f] → valid: %d",
+                    f32_to_native(v3->position.x), f32_to_native(v3->position.y), f32_to_native(v3->position.z), tv3.is_valid);
+            if (tv1.is_valid) {
+                GPU_LOG(device, "  V1 screen: [%.1f, %.1f] depth: %.3f",
+                        f32_to_native(tv1.position.x), f32_to_native(tv1.position.y), f32_to_native(tv1.position.z));
+            }
         }
+
+        // Step 5: Skip triangles with clipped vertices (basic culling)
+        if (!tv1.is_valid || !tv2.is_valid || !tv3.is_valid) {
+            triangles_clipped++;
+            continue;
+        }
+
+        // Step 6: Rasterize the triangle
+        rasterize_triangle(framebuffer, width, height, &tv1, &tv2, &tv3);
+        triangles_rendered++;
     }
 
-    // Draw a center marker to show animation
-    if (center_x < width && center_y < height) {
-        framebuffer[center_y * width + center_x] = 0xFFFFFFFF; // White center
-    }
+    GPU_LOG(device, "✅ 3D cube rendered successfully: %u triangles rendered, %u clipped",
+            triangles_rendered, triangles_clipped);
 
-    GPU_LOG(device, "✅ 3D cube rendered successfully (frame rotation: %.2f)", rotation);
+    // Clean up GPU memory mappings
+    gibgo_unmap_gpu_memory(device, vertex_memory, vertex_buffer_size);
+    gibgo_unmap_gpu_memory(device, uniform_memory, uniform_buffer_size);
 }

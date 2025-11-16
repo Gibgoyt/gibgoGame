@@ -494,11 +494,11 @@ static inline Mat4f mat4f_perspective(f32 fov_radians, f32 aspect_ratio, f32 nea
                                      {F32_ZERO, F32_ZERO, F32_ZERO, F32_ZERO},
                                      {F32_ZERO, F32_ZERO, F32_ZERO, F32_ZERO}}};
 
-    result.cols[0].x = f32_div(F32_ONE, f32_mul(aspect_ratio, tan_half_fov));  // [0][0]
-    result.cols[1].y = f32_div(F32_ONE, tan_half_fov);                         // [1][1]
-    result.cols[2].z = f32_neg(f32_div(f32_add(far_plane, near_plane), range)); // [2][2]
-    result.cols[2].w = f32_from_native(-1.0f);                                 // [2][3] = -1
-    result.cols[3].z = f32_neg(f32_div(f32_mul(f32_from_native(2.0f), f32_mul(far_plane, near_plane)), range)); // [3][2]
+    result.cols[0].x = f32_div(F32_ONE, f32_mul(aspect_ratio, tan_half_fov));  // [0][0] = 1/(ar*tan(fov/2))
+    result.cols[1].y = f32_div(F32_ONE, tan_half_fov);                         // [1][1] = 1/tan(fov/2)
+    result.cols[2].z = f32_neg(f32_div(f32_add(far_plane, near_plane), range)); // [2][2] = -(f+n)/(f-n)
+    result.cols[2].w = f32_from_native(-1.0f);                                 // [2][3] = -1 (perspective divide)
+    result.cols[3].z = f32_neg(f32_div(f32_mul(f32_from_native(2.0f), f32_mul(far_plane, near_plane)), range)); // [3][2] = -2*f*n/(f-n)
 
     return result;
 }
@@ -520,10 +520,10 @@ static inline Mat4f mat4f_look_at(Vec3f eye, Vec3f center, Vec3f up) {
 
     Mat4f result = {
         .cols = {
-            {s.x, u.x, f32_neg(f.x), F32_ZERO},
-            {s.y, u.y, f32_neg(f.y), F32_ZERO},
-            {s.z, u.z, f32_neg(f.z), F32_ZERO},
-            {f32_neg(vec3f_dot(s, eye)), f32_neg(vec3f_dot(u, eye)), vec3f_dot(f, eye), F32_ONE}
+            {s.x, u.x, f32_neg(f.x), F32_ZERO},                                              // Right vector column
+            {s.y, u.y, f32_neg(f.y), F32_ZERO},                                              // Up vector column
+            {s.z, u.z, f32_neg(f.z), F32_ZERO},                                              // Forward vector column (negated)
+            {f32_neg(vec3f_dot(s, eye)), f32_neg(vec3f_dot(u, eye)), f32_neg(vec3f_dot(f, eye)), F32_ONE}  // Translation column
         }
     };
 

@@ -391,9 +391,30 @@ GibgoResult gibgo_create_device(u32 gpu_index, GibgoGPUDevice** out_device) {
     device->fence_register = &device->regs.registers[device->regs.command_processor_offset / sizeof(u32) + 0x100];
     device->fence_counter = 1;
 
+    // Initialize persistent memory pool for GPU allocations
+    device->memory_pool.pool_size = 64 * 1024 * 1024; // 64MB pool for all GPU allocations
+    device->memory_pool.pool_memory = (u8*)malloc(device->memory_pool.pool_size);
+    if (!device->memory_pool.pool_memory) {
+        free(device->cmd_ring.command_buffer);
+        munmap((void*)device->regs.registers, device->regs.register_space_size);
+        close(device->device_fd);
+        free(gpu_list);
+        free(device);
+        return GIBGO_RESULT_ERROR_OUT_OF_MEMORY;
+    }
+
+    device->memory_pool.pool_used = 0;
+    device->memory_pool.allocation_count = 0;
+
+    // Initialize allocation tracking
+    for (u32 i = 0; i < 256; i++) {
+        device->memory_pool.allocations[i].in_use = B32_FALSE;
+    }
+
     GPU_LOG(device, "GPU device created successfully");
     GPU_LOG(device, "  VRAM: %lu MB at 0x%016lX", device->vram.size / (1024*1024), device->vram.physical_address);
     GPU_LOG(device, "  Command ring: %u slots", device->cmd_ring.capacity);
+    GPU_LOG(device, "  Memory pool: %lu MB allocated for persistent GPU memory", device->memory_pool.pool_size / (1024*1024));
 
     free(gpu_list);
     *out_device = device;
@@ -411,6 +432,12 @@ GibgoResult gibgo_destroy_device(GibgoGPUDevice* device) {
     // Free command ring buffer
     if (device->cmd_ring.command_buffer) {
         free(device->cmd_ring.command_buffer);
+    }
+
+    // Free persistent memory pool
+    if (device->memory_pool.pool_memory) {
+        GPU_LOG(device, "Freeing memory pool: %lu MB", device->memory_pool.pool_size / (1024*1024));
+        free(device->memory_pool.pool_memory);
     }
 
     // Unmap GPU registers

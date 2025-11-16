@@ -66,6 +66,11 @@ typedef struct {
 
     // Frame timing
     u32 frame_count;
+
+    // Frame stepping controls
+    b32 frame_stepping_mode;        // If true, pause between frames
+    b32 step_next_frame;            // If true, render one frame then pause
+    b32 continuous_mode;            // If true, render continuously
 } AppContext;
 
 // Cube triangle list (36 vertices for 12 triangles)
@@ -87,6 +92,7 @@ static void handle_events(AppContext* ctx);
 static void render_frame(AppContext* ctx);
 static void cleanup(AppContext* ctx);
 static void run_main_loop(AppContext* ctx);
+static void save_screenshot(AppContext* ctx, const char* filename);
 
 // X11 window initialization
 static b32 init_x11(AppContext* ctx) {
@@ -239,6 +245,31 @@ static void handle_events(AppContext* ctx) {
                     printf("  Average commands/frame: %.2f\n",
                            frames_rendered > 0 ? (double)commands_submitted / frames_rendered : 0.0);
                     printf("\n");
+                } else if (keysym == XK_p) {
+                    // Toggle frame stepping mode
+                    ctx->frame_stepping_mode = !ctx->frame_stepping_mode;
+                    ctx->continuous_mode = !ctx->frame_stepping_mode;
+                    printf("\n⏸️ Frame stepping mode: %s\n",
+                           ctx->frame_stepping_mode ? "ENABLED (press N for next frame)" : "DISABLED (continuous)");
+                } else if (keysym == XK_n) {
+                    // Step to next frame (only works in frame stepping mode)
+                    if (ctx->frame_stepping_mode) {
+                        ctx->step_next_frame = B32_TRUE;
+                        printf("▶️ Stepping to next frame...\n");
+                    } else {
+                        printf("❌ Frame stepping mode is off. Press P to enable.\n");
+                    }
+                } else if (keysym == XK_c) {
+                    // Switch to continuous mode
+                    ctx->continuous_mode = B32_TRUE;
+                    ctx->frame_stepping_mode = B32_FALSE;
+                    printf("🔄 Continuous mode enabled\n");
+                } else if (keysym == XK_r) {
+                    // Save screenshot
+                    char filename[256];
+                    snprintf(filename, sizeof(filename), "public/screenshots/%04u.ppm", ctx->frame_count);
+                    save_screenshot(ctx, filename);
+                    printf("📸 Screenshot saved: %s\n", filename);
                 }
                 break;
             }
@@ -364,15 +395,101 @@ static void run_main_loop(AppContext* ctx) {
     printf("Controls:\n");
     printf("  ESC   - Exit\n");
     printf("  SPACE - Debug info\n");
-    printf("  S     - Statistics\n\n");
+    printf("  S     - Statistics\n");
+    printf("  P     - Toggle frame stepping mode (pause between frames)\n");
+    printf("  N     - Next frame (when in frame stepping mode)\n");
+    printf("  C     - Continuous mode (normal rendering)\n");
+    printf("  R     - Save screenshot\n\n");
+
+    // Initialize to continuous mode
+    ctx->continuous_mode = B32_TRUE;
+    ctx->frame_stepping_mode = B32_FALSE;
+    ctx->step_next_frame = B32_FALSE;
 
     while (!ctx->should_close) {
         handle_events(ctx);
-        render_frame(ctx);
+
+        // Check if we should render this frame
+        b32 should_render = B32_FALSE;
+
+        if (ctx->continuous_mode) {
+            // Continuous mode: always render
+            should_render = B32_TRUE;
+        } else if (ctx->frame_stepping_mode) {
+            // Frame stepping mode: only render if step_next_frame is set
+            if (ctx->step_next_frame) {
+                should_render = B32_TRUE;
+                ctx->step_next_frame = B32_FALSE; // Reset after using
+            }
+        }
+
+        if (should_render) {
+            render_frame(ctx);
+
+            if (ctx->frame_stepping_mode) {
+                printf("⏸️ Frame %u rendered. Press N for next frame, R for screenshot, or C for continuous.\n",
+                       ctx->frame_count);
+            }
+        }
 
         // Small delay to prevent 100% CPU usage
         usleep(16667); // ~60 FPS
     }
+}
+
+// Save screenshot to PPM file
+static void save_screenshot(AppContext* ctx, const char* filename) {
+    // Get the actual GPU framebuffer data
+    GibgoGraphicsSystem* system = ctx->graphics;
+    if (!system || !system->is_initialized) {
+        printf("❌ Cannot save screenshot: graphics system not initialized\n");
+        return;
+    }
+
+    // Access internal context
+    GibgoContext* internal_ctx = (GibgoContext*)system->internal_context;
+    if (!internal_ctx) {
+        printf("❌ Cannot save screenshot: internal context not available\n");
+        return;
+    }
+
+    // Get the GPU device to access the framebuffer
+    GibgoGPUDevice* device = (GibgoGPUDevice*)system->internal_device;
+    if (!device || !device->regs.registers) {
+        printf("❌ Cannot save screenshot: framebuffer not accessible\n");
+        return;
+    }
+
+    // The DRM framebuffer is stored in device->regs.registers
+    u32* gpu_framebuffer = (u32*)device->regs.registers;
+
+    FILE* file = fopen(filename, "wb");
+    if (!file) {
+        printf("❌ Failed to create screenshot file: %s\n", filename);
+        return;
+    }
+
+    // Write PPM header
+    fprintf(file, "P6\n%d %d\n255\n", WINDOW_WIDTH, WINDOW_HEIGHT);
+
+    // Write pixel data (converting from BGRA to RGB)
+    for (int y = 0; y < WINDOW_HEIGHT; y++) {
+        for (int x = 0; x < WINDOW_WIDTH; x++) {
+            int index = y * WINDOW_WIDTH + x;
+            u32 pixel = gpu_framebuffer[index];
+
+            // Extract RGB components (assuming BGRA format)
+            u8 r = (pixel >> 16) & 0xFF;
+            u8 g = (pixel >> 8) & 0xFF;
+            u8 b = pixel & 0xFF;
+
+            fputc(r, file);
+            fputc(g, file);
+            fputc(b, file);
+        }
+    }
+
+    fclose(file);
 }
 
 // Cleanup everything

@@ -86,6 +86,23 @@ struct GibgoGPUDevice {
     GibgoGPUMemoryRegion vram;  // Main VRAM region
     u64 vram_allocation_offset; // Current allocation offset
 
+    // Persistent memory pool for GPU allocations
+    struct {
+        u8* pool_memory;        // Large malloc'd pool for all GPU allocations
+        u64 pool_size;          // Total size of memory pool
+        u64 pool_used;          // Currently allocated bytes
+
+        // Allocation tracking (simple linear allocator for now)
+        struct {
+            u64 gpu_address;    // GPU address (virtual)
+            u8* cpu_pointer;    // CPU pointer into pool_memory
+            u64 size;           // Size of allocation
+            b32 in_use;         // Allocation is active
+        } allocations[256];     // Track up to 256 allocations
+
+        u32 allocation_count;   // Number of active allocations
+    } memory_pool;
+
     // Command submission
     GibgoCommandRing cmd_ring;  // Hardware command ring buffer
 
