@@ -2,6 +2,7 @@
 
 rm $PWD/screenshots/*
 rm $PWD/screenshots_png/*
+rm $PWD/screenshots_logs/*
 
 if [ -f "$PWD/screenshots/*.ppm" ]; then
 	echo "./screenshots/*.png found"
